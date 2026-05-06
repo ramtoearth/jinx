@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust-tests:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    env:
+      PROPTEST_CASES: "200"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "filled in task 20"
+
+  python-tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    env:
+      HYPOTHESIS_PROFILE: "ci"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "filled in task 20"
+
+  cross-ipc:
+    name: Cross-process IPC round-trip
+    runs-on: ubuntu-latest
+    env:
+      PROPTEST_CASES: "200"
+      HYPOTHESIS_PROFILE: "ci"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "filled in task 20"
+
+  linters:
+    name: Linters
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "filled in task 20"

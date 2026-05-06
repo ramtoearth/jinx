@@ -1,0 +1,23 @@
+[package]
+name = "tui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tui"
+path = "src/main.rs"
+
+[dependencies]
+storage = { path = "../storage" }
+ratatui.workspace = true
+crossterm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

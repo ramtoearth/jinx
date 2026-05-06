@@ -1,0 +1,16 @@
+# Root-level Ruff configuration.
+#
+# The Python package lives under `agent/` and carries its own
+# `[tool.ruff]` section inside `agent/pyproject.toml`. This root
+# file is a light wrapper that keeps the settings consistent when
+# Ruff is invoked from the repository root (for example by CI or
+# the `linters` job) without conflicting with the package-level
+# configuration.
+
+line-length = 100
+target-version = "py311"
+
+# Only lint the Python sources of the project.
+src = ["agent"]
+extend-include = ["agent/**/*.py"]
+extend-exclude = ["target", ".venv"]

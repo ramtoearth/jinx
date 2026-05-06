@@ -1,0 +1,3 @@
+# Clippy baseline configuration for the terminal-day-organizer workspace.
+# Matches the `rust-version` declared in the workspace Cargo.toml.
+msrv = "1.75"

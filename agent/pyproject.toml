@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "terminal-day-organizer-agent"
+version = "0.1.0"
+description = "Agente Python (Strands Agents) del Organizador de Día en Terminal."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "terminal-day-organizer contributors" },
+]
+dependencies = [
+    "strands-agents",
+    "strands-tools",
+]
+
+[project.optional-dependencies]
+dev = [
+    "hypothesis",
+    "pytest",
+    "ruff",
+    "mypy",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+include = [
+    "__init__.py",
+    "ipc.py",
+    "storage_tools.py",
+    "inference.py",
+    "main.py",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

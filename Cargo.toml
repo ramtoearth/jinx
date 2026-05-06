@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["storage", "tui"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+directories = "5"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1"
+proptest = "1"
