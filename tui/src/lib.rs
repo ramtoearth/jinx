@@ -1,11 +1,10 @@
 //! Library root of the `tui` crate for the Terminal Day Organizer.
 //!
-//! This crate exposes both a library (used by tests and by future modules)
-//! and the `tui` binary. For now, the library surface is limited to the
-//! shared IPC envelope and payload types that travel between the TUI and
-//! the Python Agent over stdio (see `Canal_IPC` in `design.md`).
-//!
-//! Additional modules (app state, storage tool handlers, renderers, …) are
-//! added by later spec tasks.
+//! Modules added as tasks progress:
+//! - `ipc`: Canal_IPC envelope and payload types (task 2.1)
+//! - `app`: pure AppState and focus state machine (tasks 5.1–5.6)
+//! - `color`: terminal colour detection and style resolution (tasks 6.1–6.3)
 
+pub mod app;
+pub mod color;
 pub mod ipc;
