@@ -86,6 +86,11 @@ proptest! {
 }
 
 // Shift-Tab goes backwards
+// ---------------------------------------------------------------------------
+// Feature: terminal-day-organizer, Property 19: Ciclo determinista de foco con Tab
+// ---------------------------------------------------------------------------
+// Valida: Requisitos 14.3
+
 proptest! {
     #[test]
     fn p19_shift_tab_reverses(
@@ -159,6 +164,11 @@ proptest! {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Feature: terminal-day-organizer, Property 21: Bloqueo por viewport insuficiente
+// ---------------------------------------------------------------------------
+// Valida: Requisitos 14.9
 
 proptest! {
     #[test]

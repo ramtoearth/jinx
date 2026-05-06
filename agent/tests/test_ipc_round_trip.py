@@ -182,8 +182,9 @@ def _envelope_strategy() -> st.SearchStrategy[dict]:  # type: ignore[type-arg]
 
 
 # ---------------------------------------------------------------------------
-# Property 1 — Python side
+# Feature: terminal-day-organizer, Property 1: Round-trip de serialización IPC
 # ---------------------------------------------------------------------------
+# Valida: Requisitos 10.1, 10.2, 10.3
 
 @settings(max_examples=200, deadline=None)
 @given(_envelope_strategy())

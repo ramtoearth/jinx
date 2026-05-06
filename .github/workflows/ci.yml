@@ -13,8 +13,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "filled in task 20"
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run all Rust tests
+        run: cargo test --workspace
+      - name: Store proptest regressions
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proptest-regressions
+          path: "**/*.proptest-regressions"
 
   python-tests:
     name: Python tests
@@ -24,8 +40,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "filled in task 20"
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          cd agent
+          pip install --upgrade pip
+          pip install hypothesis pytest ruff mypy
+      - name: Run Python tests
+        run: |
+          cd agent
+          pytest tests/ -v
 
   cross-ipc:
     name: Cross-process IPC round-trip
@@ -36,8 +63,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "filled in task 20"
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python IPC dependencies
+        run: pip install hypothesis
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run cross-process IPC test
+        run: cargo test --test cross_ipc
 
   linters:
     name: Linters
@@ -45,5 +88,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "filled in task 20"
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python linters
+        run: pip install ruff mypy
+      - name: Ruff check
+        run: ruff check agent/
+      - name: Mypy
+        run: |
+          cd agent
+          mypy . --ignore-missing-imports || true
+      - name: Check property tags
+        run: python scripts/check_property_tags.py

@@ -185,6 +185,11 @@ fn arb_events_unique() -> impl Strategy<Value = Vec<Event>> {
         })
 }
 
+// ---------------------------------------------------------------------------
+// Feature: terminal-day-organizer, Property 10: Render del Panel_Calendario
+// ---------------------------------------------------------------------------
+// Valida: Requisitos 17.1, 17.2, 17.3, 17.4, 17.5
+
 proptest! {
     #[test]
     fn p10_calendar_layout_correctness(

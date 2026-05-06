@@ -65,6 +65,11 @@ proptest! {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Feature: terminal-day-organizer, Property 22: Fallback de color y neutro distinguible
+// ---------------------------------------------------------------------------
+// Valida: Requisitos 16.2, 16.4
+
 proptest! {
     #[test]
     fn p22_neutral_differs_from_group_colors(

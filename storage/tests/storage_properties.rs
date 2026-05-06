@@ -132,6 +132,11 @@ proptest! {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Feature: terminal-day-organizer, Property 12: Actualización de un único campo
+// ---------------------------------------------------------------------------
+// Valida: Requisitos 2.5, 3.5, 15.3, 15.4
+
 proptest! {
     #[test]
     fn p12_single_field_update_group(
@@ -230,6 +235,11 @@ proptest! {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Feature: terminal-day-organizer, Property 14: Operación sobre entidad inexistente
+// ---------------------------------------------------------------------------
+// Valida: Requisitos 2.6
+
 proptest! {
     #[test]
     fn p14_not_found_on_missing_event(id in 900_000_i64..=999_999_i64) {
@@ -241,6 +251,11 @@ proptest! {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Feature: terminal-day-organizer, Property 14: Operación sobre entidad inexistente
+// ---------------------------------------------------------------------------
+// Valida: Requisitos 2.6
 
 proptest! {
     #[test]
