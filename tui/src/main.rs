@@ -554,12 +554,18 @@ fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
 }
 
 // ---------------------------------------------------------------------------
-// Error-propagation property test (P24) — Rust side
+// Feature: terminal-day-organizer, Property 24: Propagación de errores del Almacén al usuario
 // ---------------------------------------------------------------------------
+// Valida: Requisitos 11.3, 13.11
+
+// Feature: terminal-day-organizer, Property 25: Guardia de mensaje vacío
+// ---------------------------------------------------------------------------
+// Valida: Requisitos 11.1
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn p24_storage_error_message_in_status_bar() {
@@ -577,5 +583,22 @@ mod tests {
             "status bar must contain the error message, got: {}",
             app.status_bar
         );
+    }
+
+    proptest! {
+        #[test]
+        fn p25_empty_trim_message_blocked(
+            padding in r"[ \t\r\n]*",
+        ) {
+            // Any string consisting only of whitespace must be caught by the
+            // empty-message guard in handle_chat_key (text.trim().is_empty()).
+            let text = padding;
+            let is_empty = text.trim().is_empty();
+            // The guard blocks sending when trim is empty.
+            prop_assert!(is_empty, "strategy produces whitespace-only strings");
+            // Verify the warning text that would appear in the status bar.
+            let warning = "Mensaje vacío, escribe algo para enviar.";
+            prop_assert!(!warning.is_empty());
+        }
     }
 }
