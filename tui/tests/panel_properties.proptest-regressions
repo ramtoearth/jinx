@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2188b193a5647a1157fa588577bba0a4ce4fc07ca2e5c44a0120524958fb111b # shrinks to tasks = [Task { id: 1, title: "C", priority: Alta, status: Pendiente, created_at: "2025-01-01T00:00:00+00:00", deadline: Some("2025-00-00T00:00:00+00:00"), group_id: None }, Task { id: 1, title: "C", priority: Alta, status: Pendiente, created_at: "2025-01-01T00:00:00+00:00", deadline: None, group_id: None }], events = []

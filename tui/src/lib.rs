@@ -6,5 +6,8 @@
 //! - `color`: terminal colour detection and style resolution (tasks 6.1–6.3)
 
 pub mod app;
+pub mod calendario;
 pub mod color;
 pub mod ipc;
+pub mod ipc_handler;
+pub mod proximos;
