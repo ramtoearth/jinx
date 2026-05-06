@@ -1,13 +1,13 @@
-//! `tui` binary crate for the Terminal Day Organizer.
+//! `tui` binary entry point for the Terminal Day Organizer.
 //!
-//! This crate hosts the Ratatui-based TUI, the IPC envelope types used to
-//! talk to the Python Agent, and the Storage Tool handlers that own the
-//! SQLite Almacén through the `storage` library crate.
-//!
-//! The real wiring is implemented in later tasks of the spec; this file
-//! currently acts as the binary entry point so the workspace builds.
+//! The real startup sequence (resolve Almacén path, spawn the Agent as a
+//! child process, enter the Ratatui render loop, …) is implemented in
+//! task 18 of the spec. For now this is a placeholder that keeps the
+//! workspace building and exercises a symbol from the `tui` library so
+//! the `[lib]` and `[[bin]]` targets stay in sync.
 
 fn main() {
-    // Placeholder entry point. Replaced by the real startup sequence in
-    // task 18 (ciclo de vida del Organizador).
+    // Keep a reference to the library so changes that break the public
+    // IPC surface fail fast at compile time.
+    let _ = tui::ipc::PROTOCOL_VERSION;
 }

@@ -24,10 +24,10 @@ Feature: terminal-day-organizer, Property <N>: <texto textual de la propiedad>
     - _Requisitos: 12.1, 12.2_
 
 - [ ] 2. Esquema IPC compartido y round-trip de serialización
-  - [ ] 2.1 Definir en el crate `tui` los tipos Rust del envelope y payloads IPC con `serde::{Serialize, Deserialize}` siguiendo Data Models: `Envelope`, `Kind`, `MessageType`, `UserMessagePayload`, `AgentReplyPayload`, `AgentInitPayload`, `StorageError`, y los payloads de cada `storage.*`
+  - [x] 2.1 Definir en el crate `tui` los tipos Rust del envelope y payloads IPC con `serde::{Serialize, Deserialize}` siguiendo Data Models: `Envelope`, `Kind`, `MessageType`, `UserMessagePayload`, `AgentReplyPayload`, `AgentInitPayload`, `StorageError`, y los payloads de cada `storage.*`
     - Incluir validación de `v=1` al deserializar
     - _Requisitos: 10.1, 10.2_
-  - [ ] 2.2 Escribir property test P1 lado Rust con `proptest`: para cualquier `Envelope` generado, `from_json(to_json(m)) == m` bajo el contrato de igualdad del diseño
+  - [x] 2.2 Escribir property test P1 lado Rust con `proptest`: para cualquier `Envelope` generado, `from_json(to_json(m)) == m` bajo el contrato de igualdad del diseño
     - **Property 1: Round-trip de serialización IPC**
     - **Valida: Requisitos 10.1, 10.2, 10.3**
   - [ ] 2.3 Definir en el paquete Python los `TypedDict` equivalentes en `agent/ipc.py` con los mismos nombres de campo que en Rust, y funciones `encode(env) -> str` / `decode(line) -> Envelope`
