@@ -230,22 +230,22 @@ Feature: terminal-day-organizer, Property <N>: <texto textual de la propiedad>
     - **Property 25: Guardia de mensaje vacío**
     - **Valida: Requisitos 11.1**
 
-- [ ] 15. Formularios modales de edición manual
-  - [ ] 15.1 Implementar el formulario modal de Tarea (crear/editar) con campos título, Prioridad, fecha límite opcional, Grupo y `Estado_Tarea` en edición; validación inline y focus interno con `Tab`
+- [x] 15. Formularios modales de edición manual
+  - [x] 15.1 Implementar el formulario modal de Tarea (crear/editar) con campos título, Prioridad, fecha límite opcional, Grupo y `Estado_Tarea` en edición; validación inline y focus interno con `Tab`
     - _Requisitos: 13.1, 13.2, 13.3_
-  - [ ] 15.2 Implementar el formulario modal de Evento (crear/editar) con título, fecha, hora de inicio, duración opcional y Grupo
+  - [x] 15.2 Implementar el formulario modal de Evento (crear/editar) con título, fecha, hora de inicio, duración opcional y Grupo
     - _Requisitos: 13.6, 13.7, 13.8_
-  - [ ] 15.3 Implementar el formulario modal de Grupo (crear/editar) con nombre y Color_Grupo (input hex o selector de 16 presets)
+  - [x] 15.3 Implementar el formulario modal de Grupo (crear/editar) con nombre y Color_Grupo (input hex o selector de 16 presets)
     - _Requisitos: 15.1, 15.2, 15.3, 15.4_
-  - [ ] 15.4 Implementar diálogo de confirmación para eliminar Tarea, Evento o Grupo, exigiendo `y` antes de persistir
+  - [x] 15.4 Implementar diálogo de confirmación para eliminar Tarea, Evento o Grupo, exigiendo `y` antes de persistir
     - _Requisitos: 13.5, 13.9, 15.5_
-  - [ ] 15.5 Cablear la confirmación del formulario a una llamada sincrónica a la capa `Storage`; actualizar la vista sólo tras `COMMIT`; en caso de error mostrar la causa en la barra de estado y mantener el formulario abierto
+  - [x] 15.5 Cablear la confirmación del formulario a una llamada sincrónica a la capa `Storage`; actualizar la vista sólo tras `COMMIT`; en caso de error mostrar la causa en la barra de estado y mantener el formulario abierto
     - _Requisitos: 7.2, 11.3, 13.2, 13.3, 13.4, 13.5, 13.7, 13.8, 13.9, 13.11_
-  - [ ] 15.6 Enlazar la confirmación de la edición manual al refresco del Panel_Proximos dentro de 1 s usando el contador de versión
+  - [x] 15.6 Enlazar la confirmación de la edición manual al refresco del Panel_Proximos dentro de 1 s usando el contador de versión
     - _Requisitos: 6.2, 13.10_
-  - [ ] 15.7 Test de ejemplo con `TestBackend`: crear una Tarea desde el formulario la hace aparecer en el Panel_Tareas tras `COMMIT`
+  - [x] 15.7 Test de ejemplo con `TestBackend`: crear una Tarea desde el formulario la hace aparecer en el Panel_Tareas tras `COMMIT`
     - _Requisitos: 13.1, 13.2_
-  - [ ] 15.8 Property test P26: para cualquier operación manual que termine en error al comprometerse en el Almacén, el estado observable queda igual al estado previo (usando un doble de `Storage` que inyecta errores)
+  - [x] 15.8 Property test P26: para cualquier operación manual que termine en error al comprometerse en el Almacén, el estado observable queda igual al estado previo (usando un doble de `Storage` que inyecta errores)
     - **Property 26: Edición manual fallida no modifica el estado**
     - **Valida: Requisitos 13.11**
 

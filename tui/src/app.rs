@@ -258,28 +258,14 @@ fn dispatch_chat_key(_state: &mut AppState, _key: KeyEvent) {
     // has nothing extra to track here.
 }
 
-fn dispatch_tareas_key(state: &mut AppState, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('n') => {
-            state.modal = Some(Modal::NewTask);
-        }
-        KeyCode::Char('e') => {
-            state.modal = Some(Modal::NewTask); // replaced by EditTask when selection known
-        }
-        KeyCode::Char('d') => {
-            state.modal = Some(Modal::NewTask); // replaced by DeleteTask when selection known
-        }
-        _ => {}
-    }
+fn dispatch_tareas_key(_state: &mut AppState, _key: KeyEvent) {
+    // Handled directly in main.rs handle_tareas_key with access to storage and cursor
 }
 
-fn dispatch_calendario_key(state: &mut AppState, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('n') => {
-            state.modal = Some(Modal::NewEvent);
-        }
-        _ => {}
-    }
+fn dispatch_calendario_key(_state: &mut AppState, _key: KeyEvent) {
+    // Handled directly in main.rs handle_calendario_key
 }
 
-fn dispatch_proximos_key(_state: &mut AppState, _key: KeyEvent) {}
+fn dispatch_proximos_key(_state: &mut AppState, _key: KeyEvent) {
+    // Handled directly in main.rs handle_proximos_key
+}
