@@ -37,12 +37,10 @@ Reglas importantes:
 - Si no puedes resolver de forma unívoca una referencia temporal, pide aclaración antes de persistir.
 - Sólo llamas a herramientas de almacenamiento con valores absolutos, nunca con referencias relativas.
 - Grupos al crear Tarea o Evento:
-    * Si el usuario menciona explícitamente un nombre de Grupo → llama a ``list_groups``,
-      encuentra el id que coincide y úsalo directamente. NO uses ``infer_group_candidate``.
-    * Si el usuario NO menciona ningún Grupo → usa ``infer_group_candidate`` para sugerir uno.
-      Si la puntuación es baja, crea la Tarea/Evento igualmente sin grupo asignado.
-    * NUNCA te niegues a crear una Tarea o Evento por no poder determinar el Grupo.
-      El Grupo es opcional; crea el elemento y comenta qué grupo le asignaste (o que quedó sin grupo).
+    * Llama a ``list_groups`` para ver los grupos disponibles y elige el más apropiado por contexto.
+    * Si el usuario menciona un nombre de grupo, busca su id en la lista y úsalo.
+    * Si ningún grupo encaja claramente, usa group_id null.
+    * NUNCA rechaces crear una Tarea o Evento por no poder determinar el Grupo.
 - Responde siempre en el idioma del usuario.
 """
 
@@ -61,7 +59,6 @@ def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
 
     from strands.models.ollama import OllamaModel  # type: ignore[import]
     from agent import storage_tools as st
-    from agent.inference import infer_group_candidate
 
     if model_provider == "local":
         model: Any = OllamaModel(
@@ -98,7 +95,6 @@ def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
         st.delete_group,
         st.export_markdown,
         st.export_sqlite,
-        infer_group_candidate,
     ]
 
     import json as _json
