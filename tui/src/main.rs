@@ -46,11 +46,11 @@ use jinx::proximos::{add_24h, proximos};
 // Embedded Python agent — bundled at compile time so the binary is self-contained
 // ---------------------------------------------------------------------------
 
-const AGENT_PYPROJECT: &str = include_str!("../../agent/pyproject.toml");
-const AGENT_INIT:      &str = include_str!("../../agent/agent/__init__.py");
-const AGENT_IPC:       &str = include_str!("../../agent/agent/ipc.py");
-const AGENT_STORAGE:   &str = include_str!("../../agent/agent/storage_tools.py");
-const AGENT_MAIN:      &str = include_str!("../../agent/agent/main.py");
+const AGENT_PYPROJECT: &str = include_str!("../../pyproject.toml");
+const AGENT_INIT:      &str = include_str!("../../agent/__init__.py");
+const AGENT_IPC:       &str = include_str!("../../agent/ipc.py");
+const AGENT_STORAGE:   &str = include_str!("../../agent/storage_tools.py");
+const AGENT_MAIN:      &str = include_str!("../../agent/main.py");
 
 /// Extract the embedded agent files to the OS data directory and return the
 /// project root path (the directory that contains `pyproject.toml`).
@@ -62,8 +62,7 @@ fn extract_agent() -> std::path::PathBuf {
         .map(|d| d.data_dir().to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from(".jinx"));
 
-    let project_dir = data_dir.join("agent");    // contains pyproject.toml
-    let pkg_dir     = project_dir.join("agent"); // contains *.py modules
+    let pkg_dir = data_dir.join("agent"); // contains *.py modules
 
     let _ = std::fs::create_dir_all(&pkg_dir);
 
@@ -78,13 +77,13 @@ fn extract_agent() -> std::path::PathBuf {
         }
     };
 
-    write_if_changed(&project_dir.join("pyproject.toml"), AGENT_PYPROJECT);
-    write_if_changed(&pkg_dir.join("__init__.py"),        AGENT_INIT);
-    write_if_changed(&pkg_dir.join("ipc.py"),             AGENT_IPC);
-    write_if_changed(&pkg_dir.join("storage_tools.py"),   AGENT_STORAGE);
-    write_if_changed(&pkg_dir.join("main.py"),            AGENT_MAIN);
+    write_if_changed(&data_dir.join("pyproject.toml"),  AGENT_PYPROJECT);
+    write_if_changed(&pkg_dir.join("__init__.py"),       AGENT_INIT);
+    write_if_changed(&pkg_dir.join("ipc.py"),            AGENT_IPC);
+    write_if_changed(&pkg_dir.join("storage_tools.py"),  AGENT_STORAGE);
+    write_if_changed(&pkg_dir.join("main.py"),           AGENT_MAIN);
 
-    project_dir
+    data_dir
 }
 
 // ---------------------------------------------------------------------------
