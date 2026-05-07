@@ -1,19 +1,18 @@
 # agent
 
-Paquete Python del Agente del Organizador de Día en Terminal. Se implementa
-sobre [Strands Agents](https://strandsagents.com/) y se comunica con la TUI
-(Rust) por un Canal_IPC JSONL sobre stdio.
+Paquete Python del agente. Construido sobre [Strands Agents](https://strandsagents.com) y
+[strands-agents-tools](https://github.com/strands-agents/tools). Se comunica con la TUI Rust
+por un canal IPC de líneas JSON sobre stdio.
 
-## Instalación (desarrollo)
+## Instalación de desarrollo
 
 ```bash
 pip install -e "./agent[dev]"
+pytest agent/tests/
 ```
 
-## Estructura
+## Módulos
 
-- `ipc.py`: envelope y `StdioClient`.
-- `storage_tools.py`: herramientas `@tool` proxy hacia el Almacén.
-- `inference.py`: inferencia determinista de Grupo (Jaccard de trigramas).
-- `main.py`: bucle de turno del Agente.
-- `tests/`: pruebas unitarias y property-based (`pytest`, `hypothesis`).
+- `ipc.py` — envelope `TypedDict` y `StdioClient`
+- `storage_tools.py` — herramientas `@tool` que proxean al almacén SQLite
+- `main.py` — construcción del agente Strands y bucle de turno

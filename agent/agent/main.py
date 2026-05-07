@@ -31,7 +31,8 @@ Eres el Agente del Organizador de Día en Terminal.
 Ayudas al usuario a gestionar sus Tareas, Eventos y Grupos usando herramientas.
 
 Reglas importantes:
-- NOW = {now}  ← usa esta fecha/hora como referencia para cualquier expresión temporal relativa.
+- NOW = la fecha/hora ISO 8601 indicada al inicio del mensaje del usuario (línea "[NOW: ...]").
+  Usa ese valor como referencia para cualquier expresión temporal relativa.
 - Cuando el usuario mencione fechas relativas ("hoy", "mañana", "en dos horas", "el viernes"),
   convierte siempre a una fecha/hora absoluta en ISO 8601 antes de llamar a cualquier herramienta.
 - Si no puedes resolver de forma unívoca una referencia temporal, pide aclaración antes de persistir.
@@ -48,7 +49,12 @@ Reglas importantes:
 # Agent setup
 # ---------------------------------------------------------------------------
 
-def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
+def _build_agent(
+    model_provider: str = "local",
+    ollama_model: str = "llama3.2:3b",
+    ollama_host: str = "http://localhost:11434",
+    bedrock_model_id: str | None = None,
+) -> Any:
     """Construct the Strands Agent with all tools registered."""
     try:
         from strands import Agent
@@ -62,8 +68,8 @@ def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
 
     if model_provider == "local":
         model: Any = OllamaModel(
-            model_id=os.environ.get("OLLAMA_MODEL", "llama3.2:3b"),
-            host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+            model_id=ollama_model,
+            host=ollama_host,
             max_tokens=4096,
             temperature=0,        # deterministic — required for reliable tool calling
             options={
@@ -71,7 +77,6 @@ def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
             },
         )
     else:
-        bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID")
         if bedrock_model_id:
             from strands.models import BedrockModel  # type: ignore[import]
             model = BedrockModel(model_id=bedrock_model_id)
@@ -105,21 +110,16 @@ def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
         if chunk:
             sys.stderr.write(chunk)
             sys.stderr.flush()
-        # Tool call start/end → log with arguments and result for debugging
+        # Tool call start → log name and arguments for debugging
         tool = kwargs.get("current_tool_use")
         if tool:
             name = tool.get("name", "?")
             inp = _json.dumps(tool.get("input", {}), ensure_ascii=False)
             sys.stderr.write(f"\n[tool→] {name}({inp})\n")
             sys.stderr.flush()
-        tool_result = kwargs.get("tool_result")
-        if tool_result:
-            content = tool_result.get("content", "")
-            sys.stderr.write(f"[←tool] {content}\n")
-            sys.stderr.flush()
 
     agent = Agent(
-        system_prompt=_SYSTEM_PROMPT.format(now=now_iso),
+        system_prompt=_SYSTEM_PROMPT,
         model=model,
         tools=tools,
         callback_handler=_stderr_callback,
@@ -153,29 +153,31 @@ def main(
     set_client(client)
 
     # Wait for agent_init
-    timezone = "UTC"
     model_provider = "local"
+    ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    bedrock_model_id: str | None = os.environ.get("BEDROCK_MODEL_ID")
+
     for env in client.incoming_lines():
         msg_type = env.get("type", "")
         if msg_type == "agent_init":
             payload = env.get("payload") or {}
-            timezone = payload.get("timezone", "UTC")
-            model_provider = payload.get("model_provider", "local")
+            model_provider = payload.get("model_provider", model_provider)
+            # Config-file values from TUI take precedence; env vars are fallback for
+            # power users / CI running the agent directly without the TUI.
+            ollama_model = payload.get("ollama_model") or ollama_model
+            ollama_host = payload.get("ollama_host") or ollama_host
+            bedrock_model_id = payload.get("bedrock_model_id") or bedrock_model_id
             break
         if msg_type == "shutdown":
             return
 
-    # Env var overrides the TUI's model_provider — allows switching without recompiling.
-    # MODEL_PROVIDER=remote → Bedrock   MODEL_PROVIDER=local (default) → Ollama
-    model_provider = os.environ.get("MODEL_PROVIDER", model_provider)
-
     # Send agent_init_ack
     provider_notice: str | None = None
     if model_provider == "local":
-        ollama_model_name = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
-        provider_notice = f"Agente usando Ollama local ({ollama_model_name}). Sin envío de datos a la nube."
+        provider_notice = f"Agente usando Ollama local ({ollama_model}). Sin envío de datos a la nube."
     elif model_provider == "remote":
-        bedrock_name = os.environ.get("BEDROCK_MODEL_ID", "default")
+        bedrock_name = bedrock_model_id or "default"
         provider_notice = (
             f"Agente usando Amazon Bedrock ({bedrock_name}). "
             "Los mensajes del chat se envían a un servicio externo."
@@ -190,9 +192,12 @@ def main(
     }
     client.write_envelope(ack)
 
-    # Build the agent with the current time
-    now_iso = _get_current_time()
-    agent = _build_agent(now_iso, model_provider=model_provider)
+    agent = _build_agent(
+        model_provider=model_provider,
+        ollama_model=ollama_model,
+        ollama_host=ollama_host,
+        bedrock_model_id=bedrock_model_id,
+    )
 
     # Turn loop
     for env in client.incoming_lines():
@@ -208,14 +213,15 @@ def main(
         payload = env.get("payload") or {}
         user_text = payload.get("text", "")
 
-        # Refresh "now" for each turn (Requisito 5.1)
+        # Prepend current time so the agent can resolve relative dates (Requisito 5.1).
+        # Injecting NOW in the user message avoids mutating agent.system_prompt per-turn,
+        # which is fragile and not recommended by the Strands API.
         now_iso = _get_current_time()
-        # Update the system prompt with the current time
-        agent.system_prompt = _SYSTEM_PROMPT.format(now=now_iso)
+        contextualized = f"[NOW: {now_iso}]\n{user_text}"
 
         try:
-            response = agent(user_text)
-            reply_text = str(response)
+            response = agent(contextualized)
+            reply_text = str(response)  # AgentResult.__str__ returns accumulated assistant text
         except StorageError as e:
             reply_text = f"No he podido completar la operación: {e.message}"
         except Exception as e:

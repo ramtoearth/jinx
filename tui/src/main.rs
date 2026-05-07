@@ -35,11 +35,57 @@ use storage::{
 use uuid::Uuid;
 
 use tui::app::{AppEvent, AppState, Modal, Panel, MIN_COLS, MIN_ROWS};
+use tui::config::{self as app_config};
 use tui::ipc::{
     AgentInitAckPayload, AgentInitPayload, AgentReplyPayload, Envelope, Kind, MessageType,
     ModelProvider, UserMessagePayload,
 };
 use tui::proximos::{add_24h, proximos};
+
+// ---------------------------------------------------------------------------
+// Embedded Python agent — bundled at compile time so the binary is self-contained
+// ---------------------------------------------------------------------------
+
+const AGENT_PYPROJECT: &str = include_str!("../../agent/pyproject.toml");
+const AGENT_INIT:      &str = include_str!("../../agent/agent/__init__.py");
+const AGENT_IPC:       &str = include_str!("../../agent/agent/ipc.py");
+const AGENT_STORAGE:   &str = include_str!("../../agent/agent/storage_tools.py");
+const AGENT_MAIN:      &str = include_str!("../../agent/agent/main.py");
+
+/// Extract the embedded agent files to the OS data directory and return the
+/// project root path (the directory that contains `pyproject.toml`).
+///
+/// Files are only written when their content has changed, so subsequent calls
+/// are nearly free (a few `read_to_string` comparisons).
+fn extract_agent() -> std::path::PathBuf {
+    let data_dir = directories::ProjectDirs::from("", "", "terminal-day-organizer")
+        .map(|d| d.data_dir().to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from(".terminal-day-organizer"));
+
+    let project_dir = data_dir.join("agent");    // contains pyproject.toml
+    let pkg_dir     = project_dir.join("agent"); // contains *.py modules
+
+    let _ = std::fs::create_dir_all(&pkg_dir);
+
+    let write_if_changed = |path: &std::path::Path, content: &str| {
+        let needs_write = std::fs::read_to_string(path)
+            .map(|existing| existing != content)
+            .unwrap_or(true);
+        if needs_write {
+            if let Err(e) = std::fs::write(path, content) {
+                eprintln!("[extract_agent] could not write {}: {e}", path.display());
+            }
+        }
+    };
+
+    write_if_changed(&project_dir.join("pyproject.toml"), AGENT_PYPROJECT);
+    write_if_changed(&pkg_dir.join("__init__.py"),        AGENT_INIT);
+    write_if_changed(&pkg_dir.join("ipc.py"),             AGENT_IPC);
+    write_if_changed(&pkg_dir.join("storage_tools.py"),   AGENT_STORAGE);
+    write_if_changed(&pkg_dir.join("main.py"),            AGENT_MAIN);
+
+    project_dir
+}
 
 // ---------------------------------------------------------------------------
 // Chat message
@@ -779,11 +825,7 @@ fn save_group(state: &mut RuntimeState) {
 // ---------------------------------------------------------------------------
 
 fn spawn_agent(state: &mut RuntimeState) {
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
-    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
+    let agent_project = extract_agent();
 
     let agent_stderr = OpenOptions::new()
         .create(true)
@@ -792,16 +834,19 @@ fn spawn_agent(state: &mut RuntimeState) {
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
 
-    let mut child = Command::new(&python)
-        .arg("-m")
-        .arg("agent.main")
-        .current_dir(&workspace_root)
+    let mut child = Command::new("uv")
+        .args([
+            "run",
+            "--project", agent_project.to_str().unwrap_or("."),
+            "python", "-m", "agent.main",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(agent_stderr)
         .spawn()
         .unwrap_or_else(|e| {
-            eprintln!("Failed to spawn agent: {e}");
+            eprintln!("Error al iniciar el agente: {e}");
+            eprintln!("Instala uv: brew install uv  (o https://astral.sh/uv)");
             std::process::exit(1);
         });
 
@@ -846,13 +891,31 @@ fn spawn_agent(state: &mut RuntimeState) {
     });
 
     // Send agent_init
+    let cfg = app_config::load();
     let timezone = iana_timezone();
+    let (model_provider, ollama_model, ollama_host, bedrock_model_id) = match cfg.provider {
+        app_config::Provider::Local => (
+            ModelProvider::Local,
+            cfg.local.model,
+            cfg.local.host,
+            None,
+        ),
+        app_config::Provider::Remote => (
+            ModelProvider::Remote,
+            String::new(),
+            String::new(),
+            Some(cfg.remote.model_id).filter(|s| !s.is_empty()),
+        ),
+    };
     let init_env = Envelope::new(
         Kind::Request,
         MessageType::AgentInit,
         &AgentInitPayload {
             timezone,
-            model_provider: ModelProvider::Local,
+            model_provider,
+            ollama_model,
+            ollama_host,
+            bedrock_model_id,
         },
     )
     .expect("agent_init serializes");

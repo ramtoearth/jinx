@@ -277,6 +277,13 @@ pub struct AgentReplyPayload {
 pub struct AgentInitPayload {
     pub timezone: String,
     pub model_provider: ModelProvider,
+    /// Ollama model ID (only used when `model_provider = local`).
+    pub ollama_model: String,
+    /// Ollama server URL (only used when `model_provider = local`).
+    pub ollama_host: String,
+    /// Amazon Bedrock model ID (only used when `model_provider = remote`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bedrock_model_id: Option<String>,
 }
 
 /// Origin of the language model the Agent is using.

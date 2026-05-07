@@ -8,6 +8,7 @@
 pub mod app;
 pub mod calendario;
 pub mod color;
+pub mod config;
 pub mod ipc;
 pub mod ipc_handler;
 pub mod proximos;
