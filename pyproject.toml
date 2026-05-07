@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "jinx-agent"
 version = "0.1.0"
-description = "Agente Python (Strands Agents) de jinx."
+description = "Agente de organización jinx."
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-    { name = "jinx contributors" },
+    { name = "Ramses Mata" },
 ]
 dependencies = [
     "strands-agents[ollama]>=1.0,<2.0",
