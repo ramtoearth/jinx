@@ -22,10 +22,8 @@ def setup_fake() -> FakeIPC:
 def test_strands_tools_importable() -> None:
     """strands_tools must provide current_time, file_read, and file_write."""
     pytest.importorskip("strands_tools", reason="strands_tools not installed")
-    from strands_tools import current_time, file_read, file_write  # type: ignore[import]
-    assert callable(current_time)
-    assert callable(file_read)
-    assert callable(file_write)
+    # In strands_tools v0.5+, each tool is a module; verify they import without error.
+    from strands_tools import current_time, file_read, file_write  # type: ignore[import]  # noqa: F401
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,6 @@ tareas posteriores del plan de implementación:
 
 - ``agent.ipc``: envelope TypedDict y cliente ``StdioClient``.
 - ``agent.storage_tools``: herramientas ``@tool`` proxy hacia el Almacén.
-- ``agent.inference``: inferencia determinista de Grupo por Jaccard de trigramas.
 - ``agent.main``: cableado del ``Agent`` de Strands y bucle de turno.
 """
 

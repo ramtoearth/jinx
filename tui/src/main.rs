@@ -154,11 +154,9 @@ struct RuntimeState {
     app: AppState,
     chat_history: Vec<ChatMsg>,
     chat_input: String,
-    chat_scroll: usize,
     task_cursor: usize,
     calendar_cursor: usize,
     group_cursor: usize,
-    storage_version: u64,
     storage: Arc<dyn Storage + Send + Sync>,
     agent_child: Option<Child>,
     agent_stdin: Option<ChildStdin>,
@@ -185,11 +183,9 @@ fn run_app(
         app: AppState::new(size_cols, size_rows),
         chat_history: Vec::new(),
         chat_input: String::new(),
-        chat_scroll: 0,
         task_cursor: 0,
         calendar_cursor: 0,
         group_cursor: 0,
-        storage_version: 0,
         storage: storage.clone(),
         agent_child: None,
         agent_stdin: None,
@@ -972,7 +968,7 @@ fn iana_timezone() -> String {
 // ---------------------------------------------------------------------------
 
 fn render(frame: &mut ratatui::Frame, state: &RuntimeState) {
-    let size = frame.size();
+    let size = frame.area();
 
     // Viewport guard
     if size.width < MIN_COLS || size.height < MIN_ROWS {

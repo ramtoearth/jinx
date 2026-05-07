@@ -131,8 +131,8 @@ def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
 # Main loop
 # ---------------------------------------------------------------------------
 
-def _get_current_time(timezone: str = "UTC") -> str:
-    """Get the current time in ISO 8601 format."""
+def _get_current_time() -> str:
+    """Get the current time in ISO 8601 format (UTC)."""
     import datetime
     return datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%S+00:00"
@@ -191,7 +191,7 @@ def main(
     client.write_envelope(ack)
 
     # Build the agent with the current time
-    now_iso = _get_current_time(timezone)
+    now_iso = _get_current_time()
     agent = _build_agent(now_iso, model_provider=model_provider)
 
     # Turn loop
@@ -209,7 +209,7 @@ def main(
         user_text = payload.get("text", "")
 
         # Refresh "now" for each turn (Requisito 5.1)
-        now_iso = _get_current_time(timezone)
+        now_iso = _get_current_time()
         # Update the system prompt with the current time
         agent.system_prompt = _SYSTEM_PROMPT.format(now=now_iso)
 

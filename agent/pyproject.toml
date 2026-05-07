@@ -31,7 +31,6 @@ include = [
     "__init__.py",
     "ipc.py",
     "storage_tools.py",
-    "inference.py",
     "main.py",
 ]
 
