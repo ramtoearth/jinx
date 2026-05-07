@@ -1,6 +1,6 @@
 # jinx
 
-Aplicación de terminal para gestionar tareas, eventos y grupos usando lenguaje natural. El agente de IA corre localmente con [Ollama](https://ollama.com) — tus datos no salen de tu máquina.
+Aplicación de terminal para gestionar tareas, eventos y grupos usando lenguaje natural. El agente de IA corre localmente con [Ollama](https://ollama.com), tus datos no salen de tu máquina.
 
 ## Requisitos
 
