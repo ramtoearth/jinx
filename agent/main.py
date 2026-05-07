@@ -17,6 +17,9 @@ from agent.ipc import (
     StorageError,
 )
 from agent.storage_tools import set_client
+from strands_tools import current_time, editor, file_read, file_write, think  # type: ignore[import]
+
+_BUILTIN_TOOLS = [current_time, file_read, file_write, editor, think]
 
 # ---------------------------------------------------------------------------
 # System prompt template
@@ -41,50 +44,6 @@ Reglas importantes:
 # Agent setup
 # ---------------------------------------------------------------------------
 
-def _make_builtin_tools() -> list[Any]:
-    """Return built-in tool functions.
-
-    Tries strands_tools first; falls back to minimal pure-Python stubs so the
-    agent can run without that optional package.
-    """
-    try:
-        from strands_tools import current_time, file_read, file_write, editor  # type: ignore[import]
-        return [current_time, file_read, file_write, editor]
-    except ImportError:
-        pass
-
-    # Minimal stubs registered as Strands tools via the @tool decorator
-    from strands import tool  # type: ignore[import]
-    import datetime, pathlib
-
-    @tool
-    def current_time(timezone: str = "UTC") -> str:  # type: ignore[misc]
-        """Return the current date and time in ISO 8601 format."""
-        return datetime.datetime.now(datetime.timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%S+00:00"
-        )
-
-    @tool
-    def file_read(path: str) -> str:  # type: ignore[misc]
-        """Read the contents of a text file and return it as a string."""
-        return pathlib.Path(path).read_text(encoding="utf-8")
-
-    @tool
-    def file_write(path: str, content: str) -> str:  # type: ignore[misc]
-        """Write content to a text file, creating parent directories as needed."""
-        p = pathlib.Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
-        return f"Written {len(content)} bytes to {path}"
-
-    @tool
-    def editor(path: str) -> str:  # type: ignore[misc]
-        """Return the contents of a file for editing (read-only stub)."""
-        return pathlib.Path(path).read_text(encoding="utf-8")
-
-    return [current_time, file_read, file_write, editor]
-
-
 def _build_agent(now_iso: str) -> Any:
     """Construct the Strands Agent with all tools registered."""
     try:
@@ -97,7 +56,7 @@ def _build_agent(now_iso: str) -> Any:
     from agent import storage_tools as st
     from agent.inference import infer_group_candidate
 
-    tools = _make_builtin_tools() + [
+    tools = _BUILTIN_TOOLS + [
         st.list_tasks,
         st.create_task,
         st.update_task,

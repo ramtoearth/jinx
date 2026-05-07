@@ -14,7 +14,7 @@ authors = [
 ]
 dependencies = [
     "strands-agents",
-    "strands-tools",
+    "strands-agents-tools",
 ]
 
 [project.optional-dependencies]
