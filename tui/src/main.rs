@@ -969,11 +969,7 @@ fn send_shutdown(state: &mut RuntimeState) {
 }
 
 fn read_agent_output(state: &mut RuntimeState) {
-    loop {
-        let env = match state.agent_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            Some(e) => e,
-            None => break,
-        };
+    while let Some(env) = state.agent_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
         handle_agent_envelope(state, env);
     }
 }
@@ -1443,7 +1439,7 @@ fn render_proximos(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect)
                 " {} {} ({})",
                 if selected { "▶" } else { " " },
                 g.name,
-                g.color.to_string()
+                g.color
             );
             let style = if selected {
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)

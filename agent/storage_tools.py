@@ -12,7 +12,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from strands import tool  # type: ignore[import]
+try:
+    from strands import tool  # type: ignore[import]
+except ImportError:
+    def tool(fn):  # type: ignore[misc]
+        return fn
 
 from agent.ipc import StorageError, StdioClient
 

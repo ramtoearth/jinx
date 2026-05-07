@@ -228,8 +228,11 @@ pub fn import_sqlite(
         gs
     };
 
+    type TaskRow = (i64, String, String, String, String, Option<String>, Option<i64>);
+    type EventRow = (i64, String, String, String, Option<u32>, Option<i64>);
+
     // Read tasks
-    let tasks_raw: Vec<(i64, String, String, String, String, Option<String>, Option<i64>)> = {
+    let tasks_raw: Vec<TaskRow> = {
         let mut stmt = src_conn
             .prepare(
                 "SELECT id, title, priority, status, created_at, deadline, group_id
@@ -257,7 +260,7 @@ pub fn import_sqlite(
     };
 
     // Read events
-    let events_raw: Vec<(i64, String, String, String, Option<u32>, Option<i64>)> = {
+    let events_raw: Vec<EventRow> = {
         let mut stmt = src_conn
             .prepare(
                 "SELECT id, title, start_date, start_time, duration_minutes, group_id
@@ -286,7 +289,7 @@ pub fn import_sqlite(
     // Insert in dependency order: groups → tasks → events
     for (_, name, color) in &groups {
         let hex = crate::HexColor::new(color.clone())
-            .map_err(|e| StorageError::ValidationFailed(e))?;
+            .map_err(StorageError::ValidationFailed)?;
         target.create_group(crate::NewGroup {
             name: name.clone(),
             color: hex,
@@ -333,7 +336,7 @@ fn check_writable(path: &Path) -> Result<(), StorageError> {
         }
     }
     // Check if file can be opened for writing without actually writing
-    match std::fs::OpenOptions::new().write(true).create(true).open(path) {
+    match std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path) {
         Ok(_) => Ok(()),
         Err(e) => Err(StorageError::IoNotWritable(format!(
             "path not writable: {path:?}: {e}"
