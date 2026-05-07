@@ -5,7 +5,7 @@ Supports programmed responses and error injection.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from agent.ipc import Envelope, StorageError
 
