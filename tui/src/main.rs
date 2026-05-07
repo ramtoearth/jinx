@@ -43,6 +43,14 @@ use jinx::ipc::{
 use jinx::proximos::{add_24h, proximos};
 
 // ---------------------------------------------------------------------------
+// Platform-aware log path
+// ---------------------------------------------------------------------------
+
+fn agent_log_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("tui_agent.log")
+}
+
+// ---------------------------------------------------------------------------
 // Embedded Python agent — bundled at compile time so the binary is self-contained
 // ---------------------------------------------------------------------------
 
@@ -826,10 +834,11 @@ fn save_group(state: &mut RuntimeState) {
 fn spawn_agent(state: &mut RuntimeState) {
     let agent_project = extract_agent();
 
+    let log_path = agent_log_path();
     let agent_stderr = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/tui_agent.log")
+        .open(&log_path)
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
 
@@ -859,7 +868,7 @@ fn spawn_agent(state: &mut RuntimeState) {
         let mut log = OpenOptions::new()
             .create(true)
             .append(true)
-            .open("/tmp/tui_agent.log")
+            .open(agent_log_path())
             .ok();
         let reader = std::io::BufReader::new(child_stdout);
         for line in reader.lines() {
