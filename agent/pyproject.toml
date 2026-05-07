@@ -13,9 +13,8 @@ authors = [
     { name = "terminal-day-organizer contributors" },
 ]
 dependencies = [
-    "strands-agents",
+    "strands-agents[ollama]",
     "strands-agents-tools",
-    "ollama",
 ]
 
 [project.optional-dependencies]

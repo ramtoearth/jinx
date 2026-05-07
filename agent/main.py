@@ -63,6 +63,10 @@ def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
             model_id=os.environ.get("OLLAMA_MODEL", "llama3.2:3b"),
             host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
             max_tokens=4096,
+            temperature=0,        # deterministic — required for reliable tool calling
+            options={
+                "num_ctx": 8192,  # enough context for 22 tool schemas + conversation
+            },
         )
     else:
         bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID")
