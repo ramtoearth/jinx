@@ -374,15 +374,11 @@ fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) 
         .list_tasks(TaskFilter { status: Some(TaskStatus::Pendiente), ..Default::default() })
         .unwrap_or_default();
     match key.code {
-        KeyCode::Up => {
-            if state.task_cursor > 0 {
-                state.task_cursor -= 1;
-            }
+        KeyCode::Up if state.task_cursor > 0 => {
+            state.task_cursor -= 1;
         }
-        KeyCode::Down => {
-            if state.task_cursor + 1 < tasks.len() {
-                state.task_cursor += 1;
-            }
+        KeyCode::Down if state.task_cursor + 1 < tasks.len() => {
+            state.task_cursor += 1;
         }
         KeyCode::Char('n') => open_new_task_modal(state),
         KeyCode::Char('e') => {
@@ -416,12 +412,8 @@ fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) 
 fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let events = state.storage.list_events(None, None).unwrap_or_default();
     match key.code {
-        KeyCode::Up => {
-            if state.calendar_cursor > 0 { state.calendar_cursor -= 1; }
-        }
-        KeyCode::Down => {
-            if state.calendar_cursor + 1 < events.len() { state.calendar_cursor += 1; }
-        }
+        KeyCode::Up if state.calendar_cursor > 0 => { state.calendar_cursor -= 1; }
+        KeyCode::Down if state.calendar_cursor + 1 < events.len() => { state.calendar_cursor += 1; }
         KeyCode::Char('n') => open_new_event_modal(state),
         KeyCode::Char('e') => {
             if let Some(ev) = events.get(state.calendar_cursor) {
@@ -441,12 +433,8 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
 fn handle_proximos_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let groups = state.storage.list_groups().unwrap_or_default();
     match key.code {
-        KeyCode::Up => {
-            if state.group_cursor > 0 { state.group_cursor -= 1; }
-        }
-        KeyCode::Down => {
-            if state.group_cursor + 1 < groups.len() { state.group_cursor += 1; }
-        }
+        KeyCode::Up if state.group_cursor > 0 => { state.group_cursor -= 1; }
+        KeyCode::Down if state.group_cursor + 1 < groups.len() => { state.group_cursor += 1; }
         KeyCode::Char('g') => open_new_group_modal(state),
         KeyCode::Char('e') => {
             if let Some(g) = groups.get(state.group_cursor) {
@@ -644,14 +632,14 @@ fn handle_event_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
     match key.code {
         KeyCode::Tab => state.event_form.field = (state.event_form.field + 1) % n_fields,
         KeyCode::BackTab => state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields,
-        KeyCode::Left => if state.event_form.field == 4 {
+        KeyCode::Left if state.event_form.field == 4 => {
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + n - 1) % n;
-        },
-        KeyCode::Right => if state.event_form.field == 4 {
+        }
+        KeyCode::Right if state.event_form.field == 4 => {
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + 1) % n;
-        },
+        }
         KeyCode::Char(c) => match state.event_form.field {
             0 => state.event_form.title.push(c),
             1 => state.event_form.start_date.push(c),
@@ -676,12 +664,12 @@ fn handle_group_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
     match key.code {
         KeyCode::Tab => state.group_form.field = (state.group_form.field + 1) % 2,
         KeyCode::BackTab => state.group_form.field = (state.group_form.field + 1) % 2,
-        KeyCode::Left => if state.group_form.field == 1 && state.group_form.color_custom.is_empty() {
+        KeyCode::Left if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
             state.group_form.color_idx = (state.group_form.color_idx + COLOR_PRESETS.len() - 1) % COLOR_PRESETS.len();
-        },
-        KeyCode::Right => if state.group_form.field == 1 && state.group_form.color_custom.is_empty() {
+        }
+        KeyCode::Right if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
             state.group_form.color_idx = (state.group_form.color_idx + 1) % COLOR_PRESETS.len();
-        },
+        }
         KeyCode::Char(c) => match state.group_form.field {
             0 => state.group_form.name.push(c),
             1 => { state.group_form.color_custom.push(c); }
