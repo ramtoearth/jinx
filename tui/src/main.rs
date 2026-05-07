@@ -25,7 +25,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Tabs},
     Terminal,
 };
 use storage::{SqliteStorage, Storage, TaskFilter};
@@ -459,58 +459,52 @@ fn render(frame: &mut ratatui::Frame, state: &RuntimeState) {
         return;
     }
 
-    // Main layout: top area + status bar
-    let main_and_status = Layout::default()
+    // Layout: tab bar (3) + panel content + status bar (1)
+    let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(size);
 
-    let main_area = main_and_status[0];
-    let status_area = main_and_status[1];
+    render_tabs(frame, state, chunks[0]);
 
-    // Two columns
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(main_area);
+    match state.app.focused_panel {
+        Panel::Chat => render_chat(frame, state, chunks[1]),
+        Panel::Tareas => render_tareas(frame, state, chunks[1]),
+        Panel::Calendario => render_calendario(frame, state, chunks[1]),
+        Panel::Proximos => render_proximos(frame, state, chunks[1]),
+    }
 
-    let left_col = columns[0];
-    let right_col = columns[1];
-
-    // Left column: Panel_Chat (top) + Panel_Proximos (bottom)
-    let left_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(left_col);
-
-    // Right column: Panel_Tareas (top) + Panel_Calendario (bottom)
-    let right_rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(right_col);
-
-    render_chat(frame, state, left_rows[0]);
-    render_proximos(frame, state, left_rows[1]);
-    render_tareas(frame, state, right_rows[0]);
-    render_calendario(frame, state, right_rows[1]);
-    render_status(frame, state, status_area);
+    render_status(frame, state, chunks[2]);
 }
 
-fn panel_block(title: &str, focused: bool) -> Block<'_> {
-    let border_style = if focused {
-        Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan)
-    } else {
-        Style::default()
+fn render_tabs(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    let active = match state.app.focused_panel {
+        Panel::Chat => 0,
+        Panel::Tareas => 1,
+        Panel::Calendario => 2,
+        Panel::Proximos => 3,
     };
-    let title_str = if focused {
-        format!("{title} [ACTIVO]")
-    } else {
-        title.to_string()
-    };
+    let tabs = Tabs::new(vec!["  Chat  ", "  Tareas  ", "  Calendario  ", "  Próximos  "])
+        .select(active)
+        .block(Block::default().borders(Borders::ALL))
+        .style(Style::default().fg(Color::DarkGray))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+    frame.render_widget(tabs, area);
+}
+
+fn panel_block(title: &str) -> Block<'_> {
     Block::default()
-        .title(title_str)
+        .title(title)
         .borders(Borders::ALL)
-        .border_style(border_style)
+        .border_style(Style::default().fg(Color::Cyan))
 }
 
 fn strip_md(s: &str) -> String {
@@ -552,8 +546,7 @@ fn word_wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 fn render_chat(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let focused = state.app.focused_panel == Panel::Chat;
-    let block = panel_block("Chat", focused);
+    let block = panel_block("Chat");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -619,8 +612,7 @@ fn render_chat(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
 }
 
 fn render_proximos(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let focused = state.app.focused_panel == Panel::Proximos;
-    let block = panel_block("Próximos", focused);
+    let block = panel_block("Próximos");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -653,8 +645,7 @@ fn render_proximos(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect)
 }
 
 fn render_tareas(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let focused = state.app.focused_panel == Panel::Tareas;
-    let block = panel_block("Tareas", focused);
+    let block = panel_block("Tareas");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -679,19 +670,16 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         })
         .collect();
 
-    if focused {
-        items.push(ListItem::new(Line::from(vec![
-            Span::raw("  "),
-            Span::styled("n:nuevo  e:editar  c:completar  d:eliminar  ↑↓:navegar", Style::default().fg(Color::DarkGray)),
-        ])));
-    }
+    items.push(ListItem::new(Line::from(Span::styled(
+        "  n:nuevo  e:editar  c:completar  d:eliminar",
+        Style::default().fg(Color::DarkGray),
+    ))));
 
     frame.render_widget(List::new(items), inner);
 }
 
 fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let focused = state.app.focused_panel == Panel::Calendario;
-    let block = panel_block("Calendario", focused);
+    let block = panel_block("Calendario");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -712,20 +700,20 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
         }
     }
 
-    if focused {
-        lines.push(ListItem::new(Line::from(vec![
-            Span::styled("n:nuevo  e:editar  d:eliminar  ←→:día  PgUp/PgDn:mes", Style::default().fg(Color::DarkGray)),
-        ])));
-    }
+    lines.push(ListItem::new(Line::from(Span::styled(
+        "  n:nuevo  e:editar  d:eliminar",
+        Style::default().fg(Color::DarkGray),
+    ))));
 
     frame.render_widget(List::new(lines), inner);
 }
 
 fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    let hint = "Tab:siguiente  Shift+Tab:anterior  Ctrl+Q:salir";
     let text = if state.app.status_bar.is_empty() {
-        "Tab:cambiar panel  Ctrl+Q:salir".to_string()
+        hint.to_string()
     } else {
-        state.app.status_bar.clone()
+        format!("{}  │  {}", state.app.status_bar, hint)
     };
     let para = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(para, area);

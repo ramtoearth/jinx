@@ -73,8 +73,8 @@ pub enum Modal {
 // ---------------------------------------------------------------------------
 
 /// Minimum terminal dimensions required to render all panels (Requisito 14.9).
-pub const MIN_COLS: u16 = 100;
-pub const MIN_ROWS: u16 = 30;
+pub const MIN_COLS: u16 = 60;
+pub const MIN_ROWS: u16 = 20;
 
 /// Whether the terminal meets the minimum size requirement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
