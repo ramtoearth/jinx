@@ -92,10 +92,25 @@ def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
         infer_group_candidate,
     ]
 
+    import json as _json
+
     def _stderr_callback(**kwargs: Any) -> None:
+        # Streaming text → stderr (visible in /tmp/tui_agent.log)
         chunk = kwargs.get("data", "")
         if chunk:
             sys.stderr.write(chunk)
+            sys.stderr.flush()
+        # Tool call start/end → log with arguments and result for debugging
+        tool = kwargs.get("current_tool_use")
+        if tool:
+            name = tool.get("name", "?")
+            inp = _json.dumps(tool.get("input", {}), ensure_ascii=False)
+            sys.stderr.write(f"\n[tool→] {name}({inp})\n")
+            sys.stderr.flush()
+        tool_result = kwargs.get("tool_result")
+        if tool_result:
+            content = tool_result.get("content", "")
+            sys.stderr.write(f"[←tool] {content}\n")
             sys.stderr.flush()
 
     agent = Agent(

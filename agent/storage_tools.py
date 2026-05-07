@@ -32,6 +32,42 @@ def _send(msg_type: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, 
 
 
 # ---------------------------------------------------------------------------
+# Value normalizers — map English synonyms to the Spanish values the
+# storage layer requires, so models that respond in English still work.
+# ---------------------------------------------------------------------------
+
+_PRIORITY_MAP: Dict[str, str] = {
+    "alta": "alta", "high": "alta", "alto": "alta",
+    "media": "media", "medium": "media", "medio": "media", "normal": "media",
+    "baja": "baja", "low": "baja", "bajo": "baja",
+}
+
+_STATUS_MAP: Dict[str, str] = {
+    "pendiente": "pendiente", "pending": "pendiente",
+    "completada": "completada", "completed": "completada", "done": "completada",
+    "cancelada": "cancelada", "cancelled": "cancelada", "canceled": "cancelada",
+}
+
+
+def _norm_priority(v: Optional[str]) -> Optional[str]:
+    if v is None:
+        return None
+    normalized = _PRIORITY_MAP.get(v.lower())
+    if normalized is None:
+        raise StorageError("VALIDATION_FAILED", f"priority must be alta/media/baja, got {v!r}")
+    return normalized
+
+
+def _norm_status(v: Optional[str]) -> Optional[str]:
+    if v is None:
+        return None
+    normalized = _STATUS_MAP.get(v.lower())
+    if normalized is None:
+        raise StorageError("VALIDATION_FAILED", f"status must be pendiente/completada/cancelada, got {v!r}")
+    return normalized
+
+
+# ---------------------------------------------------------------------------
 # Tasks
 # ---------------------------------------------------------------------------
 
@@ -43,10 +79,13 @@ def list_tasks(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """List tasks, optionally filtered by status, group_id, and date range."""
+    """List tasks, optionally filtered by status, group_id, and date range.
+
+    status: "pendiente" | "completada" | "cancelada"  (or English: pending/completed/cancelled)
+    """
     payload: Dict[str, Any] = {}
     if status is not None:
-        payload["status"] = status
+        payload["status"] = _norm_status(status)
     if group_id is not None:
         payload["group_id"] = group_id
     if from_date is not None:
@@ -65,10 +104,14 @@ def create_task(
     deadline: Optional[str] = None,
     group_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Create a new task and return it."""
+    """Create a new task and return it.
+
+    priority: "alta" | "media" | "baja"  (or English: high/medium/low)
+    deadline: ISO 8601 absolute datetime, e.g. "2026-05-08T10:00:00+00:00"
+    """
     payload: Dict[str, Any] = {"title": title}
     if priority is not None:
-        payload["priority"] = priority
+        payload["priority"] = _norm_priority(priority)
     if deadline is not None:
         payload["deadline"] = deadline
     if group_id is not None:
@@ -87,14 +130,18 @@ def update_task(
     deadline: Optional[str] = None,
     group_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Update fields of a task."""
+    """Update fields of a task. Only provided fields are changed.
+
+    priority: "alta" | "media" | "baja"  (or English: high/medium/low)
+    status:   "pendiente" | "completada" | "cancelada"  (or English: pending/completed/cancelled)
+    """
     patch: Dict[str, Any] = {}
     if title is not None:
         patch["title"] = title
     if priority is not None:
-        patch["priority"] = priority
+        patch["priority"] = _norm_priority(priority)
     if status is not None:
-        patch["status"] = status
+        patch["status"] = _norm_status(status)
     if deadline is not None:
         patch["deadline"] = deadline
     if group_id is not None:
