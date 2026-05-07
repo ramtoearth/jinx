@@ -1,16 +1,16 @@
 [package]
-name = "tui"
+name = "jinx"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "tui"
+name = "jinx"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tui"
+name = "jinx"
 path = "src/main.rs"
 
 [dependencies]

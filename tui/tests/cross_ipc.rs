@@ -1,4 +1,4 @@
-// Feature: terminal-day-organizer, Property 1: Round-trip de serialización IPC (cruzado)
+// Feature: jinx, Property 1: Round-trip de serialización IPC (cruzado)
 //
 // Cross-process round-trip test: the Rust side serializes a set of Envelope
 // values to JSON Lines on stdout; the Python side reads them, deserializes with
@@ -15,7 +15,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
-use tui::ipc::{
+use jinx::ipc::{
     AgentReplyPayload, Envelope, Kind, MessageType, Priority, StorageCreateTaskRequest,
     StorageTaskDto, TaskStatus, UserMessagePayload, PROTOCOL_VERSION,
 };
@@ -54,7 +54,7 @@ fn sample_envelopes() -> Vec<Envelope> {
         Envelope::new(
             Kind::Response,
             MessageType::StorageListTasks,
-            &tui::ipc::StorageListTasksResponse {
+            &jinx::ipc::StorageListTasksResponse {
                 tasks: vec![StorageTaskDto {
                     id: 1,
                     title: "tarea uno".to_string(),

@@ -1,4 +1,4 @@
-//! Terminal Day Organizer — TUI binary entry point.
+//! jinx — TUI binary entry point.
 //!
 //! Startup sequence (Task 18 / Requisitos 7.1, 7.3, 7.4, 9.1, 9.2):
 //! 1. Resolve or override the SQLite path.
@@ -34,13 +34,13 @@ use storage::{
 };
 use uuid::Uuid;
 
-use tui::app::{AppEvent, AppState, Modal, Panel, MIN_COLS, MIN_ROWS};
-use tui::config::{self as app_config};
-use tui::ipc::{
+use jinx::app::{AppEvent, AppState, Modal, Panel, MIN_COLS, MIN_ROWS};
+use jinx::config::{self as app_config};
+use jinx::ipc::{
     AgentInitAckPayload, AgentInitPayload, AgentReplyPayload, Envelope, Kind, MessageType,
     ModelProvider, UserMessagePayload,
 };
-use tui::proximos::{add_24h, proximos};
+use jinx::proximos::{add_24h, proximos};
 
 // ---------------------------------------------------------------------------
 // Embedded Python agent — bundled at compile time so the binary is self-contained
@@ -58,9 +58,9 @@ const AGENT_MAIN:      &str = include_str!("../../agent/agent/main.py");
 /// Files are only written when their content has changed, so subsequent calls
 /// are nearly free (a few `read_to_string` comparisons).
 fn extract_agent() -> std::path::PathBuf {
-    let data_dir = directories::ProjectDirs::from("", "", "terminal-day-organizer")
+    let data_dir = directories::ProjectDirs::from("", "", "jinx")
         .map(|d| d.data_dir().to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from(".terminal-day-organizer"));
+        .unwrap_or_else(|| std::path::PathBuf::from(".jinx"));
 
     let project_dir = data_dir.join("agent");    // contains pyproject.toml
     let pkg_dir     = project_dir.join("agent"); // contains *.py modules
@@ -276,7 +276,7 @@ fn run_app(
                     handle_key(&mut state, key);
                 }
                 Event::Resize(cols, rows) => {
-                    state.app = tui::app::reduce(state.app, AppEvent::Resize(cols, rows));
+                    state.app = jinx::app::reduce(state.app, AppEvent::Resize(cols, rows));
                 }
                 _ => {}
             }
@@ -314,11 +314,11 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     // Tab / Shift-Tab cycle panels
     match key.code {
         KeyCode::Tab if key.modifiers == KeyModifiers::NONE => {
-            state.app = tui::app::reduce(state.app.clone(), AppEvent::Key(key));
+            state.app = jinx::app::reduce(state.app.clone(), AppEvent::Key(key));
             return;
         }
         KeyCode::BackTab => {
-            state.app = tui::app::reduce(state.app.clone(), AppEvent::Key(key));
+            state.app = jinx::app::reduce(state.app.clone(), AppEvent::Key(key));
             return;
         }
         _ => {}
@@ -987,7 +987,7 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
             state.app.status_bar = "Listo.".to_string();
         }
         mt if is_storage_message_type(mt) => {
-            let response = tui::ipc_handler::handle_storage_request(&env, &state.storage);
+            let response = jinx::ipc_handler::handle_storage_request(&env, &state.storage);
             if let Some(ref mut stdin) = state.agent_stdin {
                 if let Ok(line) = serde_json::to_string(&response) {
                     let _ = stdin.write_all(line.as_bytes());
@@ -1406,10 +1406,10 @@ fn render_proximos(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect)
         .iter()
         .map(|e| {
             let label = match e.kind {
-                tui::proximos::EntryKind::Task { priority } => {
+                jinx::proximos::EntryKind::Task { priority } => {
                     format!("▸ {} ({}) [{} {}]", e.title, priority.as_str(), e.date, e.time)
                 }
-                tui::proximos::EntryKind::Event => {
+                jinx::proximos::EntryKind::Event => {
                     format!("● {} [{} {}]", e.title, e.date, e.time)
                 }
             };
@@ -1501,7 +1501,7 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
 
     let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
     let events = state.storage.list_events(None, None).unwrap_or_default();
-    let view = tui::calendario::calendar_layout(&tasks, &events);
+    let view = jinx::calendario::calendar_layout(&tasks, &events);
 
     let mut dates: Vec<String> = view.keys().cloned().collect();
     dates.sort();
@@ -1555,7 +1555,7 @@ mod tests {
         let mut app = AppState::new(120, 40);
 
         let err = storage::StorageError::NotFound("Task 99 not found".to_string());
-        app = tui::app::reduce(
+        app = jinx::app::reduce(
             app,
             AppEvent::StorageError(err.clone()),
         );

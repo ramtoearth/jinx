@@ -1,10 +1,10 @@
-// Feature: terminal-day-organizer
+// Feature: jinx
 // Property tests for AppState focus machine, viewport guard, and key routing.
 // Properties 18–21.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use proptest::prelude::*;
-use tui::app::{AppEvent, AppState, Panel, ViewportState, MIN_COLS, MIN_ROWS, reduce};
+use jinx::app::{AppEvent, AppState, Panel, ViewportState, MIN_COLS, MIN_ROWS, reduce};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -35,7 +35,7 @@ fn key_char(c: char) -> AppEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 18: Exactamente un Panel_Enfocado
+// Feature: jinx, Property 18: Exactamente un Panel_Enfocado
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 14.2
 
@@ -59,7 +59,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 19: Ciclo determinista de foco con Tab
+// Feature: jinx, Property 19: Ciclo determinista de foco con Tab
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 14.3
 
@@ -87,7 +87,7 @@ proptest! {
 
 // Shift-Tab goes backwards
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 19: Ciclo determinista de foco con Tab
+// Feature: jinx, Property 19: Ciclo determinista de foco con Tab
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 14.3
 
@@ -116,7 +116,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 20: Ruteo exclusivo al panel enfocado
+// Feature: jinx, Property 20: Ruteo exclusivo al panel enfocado
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 14.5
 //
@@ -144,7 +144,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 21: Bloqueo por viewport insuficiente
+// Feature: jinx, Property 21: Bloqueo por viewport insuficiente
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 14.9
 
@@ -166,7 +166,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 21: Bloqueo por viewport insuficiente
+// Feature: jinx, Property 21: Bloqueo por viewport insuficiente
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 14.9
 

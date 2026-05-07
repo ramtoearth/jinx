@@ -3,13 +3,13 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "terminal-day-organizer-agent"
+name = "jinx-agent"
 version = "0.1.0"
-description = "Agente Python (Strands Agents) del Organizador de Día en Terminal."
+description = "Agente Python (Strands Agents) de jinx."
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-    { name = "terminal-day-organizer contributors" },
+    { name = "jinx contributors" },
 ]
 dependencies = [
     "strands-agents[ollama]>=1.0,<2.0",
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-tdo-agent = "agent.main:main"
+jinx-agent = "agent.main:main"
 
 [project.optional-dependencies]
 dev = [

@@ -1,4 +1,4 @@
-# Feature: terminal-day-organizer, Property 1: Round-trip de serialización IPC
+# Feature: jinx, Property 1: Round-trip de serialización IPC
 #
 # Property 1: Round-trip de serialización IPC
 # Para cualquier mensaje válido del Canal_IPC, serializar el mensaje a JSON,
@@ -182,7 +182,7 @@ def _envelope_strategy() -> st.SearchStrategy[dict]:  # type: ignore[type-arg]
 
 
 # ---------------------------------------------------------------------------
-# Feature: terminal-day-organizer, Property 1: Round-trip de serialización IPC
+# Feature: jinx, Property 1: Round-trip de serialización IPC
 # ---------------------------------------------------------------------------
 # Valida: Requisitos 10.1, 10.2, 10.3
 

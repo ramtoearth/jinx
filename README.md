@@ -1,4 +1,4 @@
-# Organizador de Día en Terminal
+# jinx
 
 Aplicación de terminal para gestionar tareas, eventos y grupos usando lenguaje natural. El agente de IA corre localmente con [Ollama](https://ollama.com) — tus datos no salen de tu máquina.
 
@@ -15,8 +15,8 @@ Aplicación de terminal para gestionar tareas, eventos y grupos usando lenguaje 
 
 ```bash
 # 1. Clonar el repositorio
-git clone https://github.com/tu-usuario/terminal-day-organizer
-cd terminal-day-organizer
+git clone https://github.com/tu-usuario/jinx
+cd jinx
 
 # 2. Descargar el modelo de IA
 ollama pull llama3.1:latest
@@ -28,7 +28,7 @@ cargo install --path tui
 Ejecuta la app desde cualquier directorio con:
 
 ```bash
-tui
+jinx
 ```
 
 > El primer arranque tarda ~30 segundos mientras `uv` instala las dependencias del agente en un entorno aislado. Los arranques posteriores son instantáneos.
@@ -37,8 +37,8 @@ tui
 
 Al ejecutar la app por primera vez se crea el archivo de configuración:
 
-- **macOS:** `~/Library/Application Support/terminal-day-organizer/config.toml`
-- **Linux:** `~/.config/terminal-day-organizer/config.toml`
+- **macOS:** `~/Library/Application Support/jinx/config.toml`
+- **Linux:** `~/.config/jinx/config.toml`
 
 ```toml
 # Proveedor: "local" (Ollama) o "remote" (Amazon Bedrock)

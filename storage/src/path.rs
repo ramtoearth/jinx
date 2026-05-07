@@ -12,11 +12,11 @@ use crate::StorageError;
 ///
 /// | Platform | Base directory                                                                              |
 /// |----------|---------------------------------------------------------------------------------------------|
-/// | Linux    | `$XDG_CONFIG_HOME` or `$HOME/.config/terminal-day-organizer/`                              |
-/// | macOS    | `$HOME/Library/Application Support/terminal-day-organizer/`                                |
-/// | Windows  | `%APPDATA%\terminal-day-organizer\`                                                         |
+/// | Linux    | `$XDG_CONFIG_HOME` or `$HOME/.config/jinx/`                                                |
+/// | macOS    | `$HOME/Library/Application Support/jinx/`                                                  |
+/// | Windows  | `%APPDATA%\jinx\`                                                                           |
 pub fn resolve_db_path() -> Result<PathBuf, StorageError> {
-    let dirs = ProjectDirs::from("", "", "terminal-day-organizer").ok_or_else(|| {
+    let dirs = ProjectDirs::from("", "", "jinx").ok_or_else(|| {
         StorageError::Internal("cannot determine user config directory".into())
     })?;
     let config_dir = dirs.config_dir();

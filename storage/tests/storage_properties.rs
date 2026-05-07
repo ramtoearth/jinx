@@ -1,4 +1,4 @@
-// Feature: terminal-day-organizer
+// Feature: jinx
 // Property tests for the SqliteStorage implementation.
 // Each test carries the annotation required by design.md § Testing Strategy.
 
@@ -79,7 +79,7 @@ fn arb_new_group() -> impl Strategy<Value = NewGroup> {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 11: Creación con valores por defecto
+// Feature: jinx, Property 11: Creación con valores por defecto
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 2.1, 2.7
 
@@ -97,7 +97,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 12: Actualización de un único campo
+// Feature: jinx, Property 12: Actualización de un único campo
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 2.5, 3.5, 15.3, 15.4
 
@@ -133,7 +133,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 12: Actualización de un único campo
+// Feature: jinx, Property 12: Actualización de un único campo
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 2.5, 3.5, 15.3, 15.4
 
@@ -160,7 +160,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 13: Eliminación y cascada a NULL
+// Feature: jinx, Property 13: Eliminación y cascada a NULL
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 2.4, 3.4, 15.5
 
@@ -216,7 +216,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 14: Operación sobre entidad inexistente
+// Feature: jinx, Property 14: Operación sobre entidad inexistente
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 2.6
 
@@ -236,7 +236,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 14: Operación sobre entidad inexistente
+// Feature: jinx, Property 14: Operación sobre entidad inexistente
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 2.6
 
@@ -253,7 +253,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 14: Operación sobre entidad inexistente
+// Feature: jinx, Property 14: Operación sobre entidad inexistente
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 2.6
 
@@ -272,7 +272,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 15: Durabilidad transaccional al reabrir
+// Feature: jinx, Property 15: Durabilidad transaccional al reabrir
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 7.2, 7.3
 
@@ -326,7 +326,7 @@ impl Drop for TempDir {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 16: Unicidad de nombre de Grupo
+// Feature: jinx, Property 16: Unicidad de nombre de Grupo
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 15.1, 15.2
 
@@ -356,7 +356,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 17: Invariante de Grupo único por entidad
+// Feature: jinx, Property 17: Invariante de Grupo único por entidad
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 15.6
 
@@ -377,7 +377,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 6: Orden total de listado y priorización de Tareas
+// Feature: jinx, Property 6: Orden total de listado y priorización de Tareas
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 2.2, 4.1
 
@@ -420,7 +420,7 @@ fn priority_rank(p: Priority) -> u8 {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 7: Listado de Eventos por rango
+// Feature: jinx, Property 7: Listado de Eventos por rango
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 3.3
 

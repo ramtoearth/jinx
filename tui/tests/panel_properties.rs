@@ -1,10 +1,10 @@
-// Feature: terminal-day-organizer
+// Feature: jinx
 // Property tests P8, P9, P10 for Panel_Proximos and Panel_Calendario.
 
 use proptest::prelude::*;
 use storage::{Event, Priority, Task, TaskStatus};
-use tui::calendario::{CalendarView, TASK_PREFIX, EVENT_PREFIX, calendar_layout};
-use tui::proximos::{EntryKind, ProximosEntry, proximos};
+use jinx::calendario::{CalendarView, TASK_PREFIX, EVENT_PREFIX, calendar_layout};
+use jinx::proximos::{EntryKind, ProximosEntry, proximos};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,7 +53,7 @@ fn arb_event(id: i64) -> impl Strategy<Value = Event> {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 8: Selección del Panel_Proximos
+// Feature: jinx, Property 8: Selección del Panel_Proximos
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 6.1
 
@@ -104,7 +104,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 9: Contenido del render del Panel_Proximos
+// Feature: jinx, Property 9: Contenido del render del Panel_Proximos
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 6.3, 6.4
 
@@ -140,7 +140,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 10: Render del Panel_Calendario
+// Feature: jinx, Property 10: Render del Panel_Calendario
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 17.1, 17.2, 17.3, 17.4, 17.5
 
@@ -186,7 +186,7 @@ fn arb_events_unique() -> impl Strategy<Value = Vec<Event>> {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 10: Render del Panel_Calendario
+// Feature: jinx, Property 10: Render del Panel_Calendario
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 17.1, 17.2, 17.3, 17.4, 17.5
 

@@ -1,4 +1,4 @@
-// Feature: terminal-day-organizer
+// Feature: jinx
 
 use proptest::prelude::*;
 use storage::{
@@ -50,7 +50,7 @@ impl Drop for TempDir {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 2: Round-trip de exportación SQLite
+// Feature: jinx, Property 2: Round-trip de exportación SQLite
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 8.2, 8.5
 
@@ -142,7 +142,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 3: Cobertura de la exportación a Markdown
+// Feature: jinx, Property 3: Cobertura de la exportación a Markdown
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 8.1
 

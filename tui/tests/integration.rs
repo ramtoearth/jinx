@@ -1,17 +1,17 @@
-// Feature: terminal-day-organizer
+// Feature: jinx
 // Integration tests 19.1–19.5: end-to-end verification of component interactions.
 
 use std::sync::Arc;
 
 use storage::{NewEvent, NewGroup, NewTask, SqliteStorage, Storage, TaskFilter};
-use tui::app::{AppEvent, AppState, Panel};
-use tui::calendario::calendar_layout;
-use tui::color::{resolve_style, ColorMode};
-use tui::ipc::{
+use jinx::app::{AppEvent, AppState, Panel};
+use jinx::calendario::calendar_layout;
+use jinx::color::{resolve_style, ColorMode};
+use jinx::ipc::{
     Envelope, Kind, MessageType, StorageCreateTaskRequest, StorageListTasksRequest,
 };
-use tui::ipc_handler::{handle_storage_request, is_storage_request};
-use tui::proximos::proximos;
+use jinx::ipc_handler::{handle_storage_request, is_storage_request};
+use jinx::proximos::proximos;
 
 // ---------------------------------------------------------------------------
 // Integration test 19.1: IPC handler + storage round-trip
@@ -47,7 +47,7 @@ fn ipc_create_task_appears_in_storage() {
     // Panel_Tareas render: task should appear in list ordered by priority
     let focused_app = AppState::new(120, 40);
     assert_eq!(focused_app.focused_panel, Panel::Chat);
-    let app = tui::app::reduce(focused_app, AppEvent::Key(crossterm::event::KeyEvent::new(
+    let app = jinx::app::reduce(focused_app, AppEvent::Key(crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Tab,
         crossterm::event::KeyModifiers::NONE,
     )));
@@ -62,7 +62,7 @@ fn ipc_create_task_appears_in_storage() {
 #[test]
 fn timeout_status_appears_in_status_bar() {
     let mut app = AppState::new(120, 40);
-    app = tui::app::reduce(
+    app = jinx::app::reduce(
         app,
         AppEvent::StatusMessage("Tiempo de espera agotado. Vuelve a intentarlo.".to_string()),
     );
@@ -120,7 +120,7 @@ fn ipc_list_tasks_with_group_filter() {
     let response = handle_storage_request(&envelope, &storage);
     assert!(response.error.is_none());
 
-    let payload: tui::ipc::StorageListTasksResponse =
+    let payload: jinx::ipc::StorageListTasksResponse =
         response.payload_as().expect("decode").expect("present");
     assert_eq!(payload.tasks.len(), 1);
     assert_eq!(payload.tasks[0].title, "informe trimestral");

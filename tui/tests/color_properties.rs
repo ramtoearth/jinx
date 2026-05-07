@@ -1,10 +1,10 @@
-// Feature: terminal-day-organizer
+// Feature: jinx
 // Property tests for the colour resolution functions.
 // Properties 22 and 23.
 
 use proptest::prelude::*;
 use storage::HexColor;
-use tui::color::{ColorMode, nearest_xterm256, resolve_style, XTERM256_PALETTE};
+use jinx::color::{ColorMode, nearest_xterm256, resolve_style, XTERM256_PALETTE};
 
 fn arb_hex() -> impl Strategy<Value = HexColor> {
     r"#[0-9a-fA-F]{6}".prop_map(|s| HexColor::new(s).unwrap())
@@ -27,7 +27,7 @@ fn parse_hex(hex: &str) -> (u8, u8, u8) {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 22: Fallback de color y neutro distinguible
+// Feature: jinx, Property 22: Fallback de color y neutro distinguible
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 16.2, 16.4
 
@@ -66,7 +66,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 22: Fallback de color y neutro distinguible
+// Feature: jinx, Property 22: Fallback de color y neutro distinguible
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 16.2, 16.4
 
@@ -87,7 +87,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Feature: terminal-day-organizer, Property 23: Marcador textual en modo monocromo
+// Feature: jinx, Property 23: Marcador textual en modo monocromo
 // ---------------------------------------------------------------------------
 // Valida: Requisitos 16.5
 

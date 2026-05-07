@@ -1,8 +1,7 @@
-"""Paquete del Agente del Organizador de Día en Terminal.
+"""Paquete del agente de jinx.
 
-Este paquete implementa el proceso hijo Python que cooperará con la TUI en
-Rust a través de un Canal_IPC JSONL sobre stdio. Los submódulos se cablean en
-tareas posteriores del plan de implementación:
+Implementa el proceso hijo Python que coopera con la TUI Rust a través de un
+Canal_IPC JSONL sobre stdio.
 
 - ``agent.ipc``: envelope TypedDict y cliente ``StdioClient``.
 - ``agent.storage_tools``: herramientas ``@tool`` proxy hacia el Almacén.

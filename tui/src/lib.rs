@@ -1,4 +1,4 @@
-//! Library root of the `tui` crate for the Terminal Day Organizer.
+//! Library root of the `jinx` crate.
 //!
 //! Modules added as tasks progress:
 //! - `ipc`: Canal_IPC envelope and payload types (task 2.1)

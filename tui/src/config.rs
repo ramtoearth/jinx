@@ -58,9 +58,9 @@ impl Default for Config {
 // ---------------------------------------------------------------------------
 
 pub fn config_path() -> PathBuf {
-    directories::ProjectDirs::from("", "", "terminal-day-organizer")
+    directories::ProjectDirs::from("", "", "jinx")
         .map(|dirs| dirs.config_dir().join("config.toml"))
-        .unwrap_or_else(|| PathBuf::from(".terminal-day-organizer/config.toml"))
+        .unwrap_or_else(|| PathBuf::from(".jinx/config.toml"))
 }
 
 // ---------------------------------------------------------------------------
@@ -69,10 +69,10 @@ pub fn config_path() -> PathBuf {
 
 /// Template written on first run. Contains inline comments so users understand
 /// each field without consulting external docs.
-const DEFAULT_TOML: &str = r#"# Terminal Day Organizer — configuración del modelo de IA
+const DEFAULT_TOML: &str = r#"# jinx — configuración del modelo de IA
 # Edita este archivo para cambiar de proveedor o modelo.
-# Ubicación: ~/Library/Application Support/terminal-day-organizer/config.toml (macOS)
-#             ~/.config/terminal-day-organizer/config.toml (Linux)
+# Ubicación: ~/Library/Application Support/jinx/config.toml (macOS)
+#             ~/.config/jinx/config.toml (Linux)
 
 # Proveedor activo: "local" (Ollama, sin envío de datos) o "remote" (Amazon Bedrock)
 provider = "local"

@@ -27,7 +27,7 @@ _BUILTIN_TOOLS = [current_time, file_read, file_write, editor, think]
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """\
-Eres el Agente del Organizador de Día en Terminal.
+Eres el agente de jinx.
 Ayudas al usuario a gestionar sus Tareas, Eventos y Grupos usando herramientas.
 
 Reglas importantes:

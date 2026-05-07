@@ -1,4 +1,4 @@
-// Feature: terminal-day-organizer, Property 1: Round-trip de serialización IPC
+// Feature: jinx, Property 1: Round-trip de serialización IPC
 //
 // Property-based test that exercises the whole Canal_IPC envelope surface:
 // for any well-formed `Envelope`, `from_json(to_json(env)) == env` under the
@@ -25,7 +25,7 @@
 use proptest::option;
 use proptest::prelude::*;
 use serde_json::Value;
-use tui::ipc::{
+use jinx::ipc::{
     AgentInitAckPayload, AgentInitPayload, AgentReplyPayload, AgentToolProgressPayload, Envelope,
     Kind, MessageType, ModelProvider, Priority, ShutdownPayload, StorageCreateEventRequest,
     StorageCreateEventResponse, StorageCreateGroupRequest, StorageCreateGroupResponse,
@@ -257,6 +257,9 @@ fn arb_agent_init_arm() -> impl Strategy<Value = Content> {
             AgentInitPayload {
                 timezone,
                 model_provider,
+                ollama_model: String::new(),
+                ollama_host: String::new(),
+                bedrock_model_id: None,
             },
         )
     })
@@ -540,7 +543,7 @@ fn arb_envelope() -> impl Strategy<Value = Envelope> {
 // Property 1: Round-trip de serialización IPC
 // ---------------------------------------------------------------------------
 
-// Feature: terminal-day-organizer, Property 1: Round-trip de serialización IPC
+// Feature: jinx, Property 1: Round-trip de serialización IPC
 proptest! {
     #[test]
     fn round_trip_serialization_ipc(envelope in arb_envelope()) {
