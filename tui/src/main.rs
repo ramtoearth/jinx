@@ -9,9 +9,10 @@
 //! 6. Enter the main event loop (render + key events + IPC reads).
 //! 7. On `Ctrl+Q` send `shutdown` and wait for the agent to exit.
 
+use std::fs::OpenOptions;
 use std::io::{self, Write as _};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use crossterm::{
@@ -31,7 +32,10 @@ use storage::{SqliteStorage, Storage, TaskFilter};
 use uuid::Uuid;
 
 use tui::app::{AppEvent, AppState, Panel, MIN_COLS, MIN_ROWS};
-use tui::ipc::{AgentInitPayload, Envelope, Kind, MessageType, ModelProvider, UserMessagePayload};
+use tui::ipc::{
+    AgentInitAckPayload, AgentInitPayload, AgentReplyPayload, Envelope, Kind, MessageType,
+    ModelProvider, UserMessagePayload,
+};
 use tui::proximos::{add_24h, proximos};
 
 // ---------------------------------------------------------------------------
@@ -99,6 +103,8 @@ struct RuntimeState {
     storage: Arc<dyn Storage + Send + Sync>,
     agent_child: Option<Child>,
     agent_stdin: Option<ChildStdin>,
+    // Inbound envelopes from the agent reader thread
+    agent_rx: Option<mpsc::Receiver<Envelope>>,
     // Pending message waiting for agent_reply (request id)
     pending_request: Option<(Uuid, Instant)>,
 }
@@ -123,6 +129,7 @@ fn run_app(
         storage: storage.clone(),
         agent_child: None,
         agent_stdin: None,
+        agent_rx: None,
         pending_request: None,
     };
 
@@ -136,6 +143,9 @@ fn run_app(
     loop {
         // --- Render -------------------------------------------------------
         terminal.draw(|f| render(f, &state))?;
+
+        // --- Drain agent output every iteration (non-blocking) ------------
+        read_agent_output(&mut state);
 
         // --- Event polling ------------------------------------------------
         let elapsed = last_tick.elapsed();
@@ -164,9 +174,6 @@ fn run_app(
         // --- Tick ---------------------------------------------------------
         if last_tick.elapsed() >= tick {
             last_tick = Instant::now();
-
-            // Read any pending agent output (non-blocking)
-            read_agent_output(&mut state);
 
             // Check timeout
             if let Some((_, started)) = state.pending_request {
@@ -251,17 +258,25 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
 
 fn spawn_agent(state: &mut RuntimeState) {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
-    let agent_main = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .join("agent/main.py");
+        .to_path_buf();
+
+    let agent_stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/tui_agent.log")
+        .map(Stdio::from)
+        .unwrap_or_else(|_| Stdio::null());
 
     let mut child = Command::new(&python)
         .arg("-m")
         .arg("agent.main")
+        .current_dir(&workspace_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(agent_stderr)
         .spawn()
         .unwrap_or_else(|e| {
             eprintln!("Failed to spawn agent: {e}");
@@ -269,6 +284,44 @@ fn spawn_agent(state: &mut RuntimeState) {
         });
 
     let mut stdin = child.stdin.take().expect("child stdin");
+    let child_stdout = child.stdout.take().expect("child stdout");
+
+    // Background reader thread: parses JSON lines and sends Envelopes over mpsc
+    let (tx, rx) = mpsc::channel::<Envelope>();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let mut log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/tui_agent.log")
+            .ok();
+        let reader = std::io::BufReader::new(child_stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(line) if !line.trim().is_empty() => {
+                    match serde_json::from_str::<Envelope>(&line) {
+                        Ok(env) => {
+                            if tx.send(env).is_err() {
+                                break; // main thread dropped receiver — TUI is shutting down
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(ref mut f) = log {
+                                let _ = writeln!(f, "[agent reader] parse error: {e}: {line}");
+                            }
+                        }
+                    }
+                }
+                Ok(_) => {} // blank line
+                Err(e) => {
+                    if let Some(ref mut f) = log {
+                        let _ = writeln!(f, "[agent reader] read error: {e}");
+                    }
+                    break;
+                }
+            }
+        }
+    });
 
     // Send agent_init
     let timezone = iana_timezone();
@@ -287,6 +340,7 @@ fn spawn_agent(state: &mut RuntimeState) {
 
     state.agent_child = Some(child);
     state.agent_stdin = Some(stdin);
+    state.agent_rx = Some(rx);
     state.app.agent_alive = true;
 }
 
@@ -322,10 +376,65 @@ fn send_shutdown(state: &mut RuntimeState) {
 }
 
 fn read_agent_output(state: &mut RuntimeState) {
-    let Some(_child) = state.agent_child.as_mut() else { return };
-    // Non-blocking agent output processing would run in a spawned thread in
-    // production. This stub is intentionally empty; the integration path (Task 19)
-    // will replace it with a thread-safe channel-based approach.
+    loop {
+        let env = match state.agent_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            Some(e) => e,
+            None => break,
+        };
+        handle_agent_envelope(state, env);
+    }
+}
+
+fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
+    match env.message_type {
+        MessageType::AgentInitAck => {
+            if let Ok(Some(p)) = env.payload_as::<AgentInitAckPayload>() {
+                if let Some(notice) = p.provider_notice {
+                    state.chat_history.push(ChatMsg { role: "sistema", text: notice });
+                }
+            }
+        }
+        MessageType::AgentReply => {
+            if let Ok(Some(p)) = env.payload_as::<AgentReplyPayload>() {
+                state.chat_history.push(ChatMsg { role: "agente", text: p.text });
+            }
+            state.pending_request = None;
+            state.app.status_bar = "Listo.".to_string();
+        }
+        mt if is_storage_message_type(mt) => {
+            let response = tui::ipc_handler::handle_storage_request(&env, &state.storage);
+            if let Some(ref mut stdin) = state.agent_stdin {
+                if let Ok(line) = serde_json::to_string(&response) {
+                    let _ = stdin.write_all(line.as_bytes());
+                    let _ = stdin.write_all(b"\n");
+                    let _ = stdin.flush();
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_storage_message_type(mt: MessageType) -> bool {
+    matches!(
+        mt,
+        MessageType::StorageListTasks
+            | MessageType::StorageCreateTask
+            | MessageType::StorageUpdateTask
+            | MessageType::StorageCompleteTask
+            | MessageType::StorageDeleteTask
+            | MessageType::StorageListEvents
+            | MessageType::StorageCreateEvent
+            | MessageType::StorageUpdateEvent
+            | MessageType::StorageDeleteEvent
+            | MessageType::StorageListGroups
+            | MessageType::StorageCreateGroup
+            | MessageType::StorageRenameGroup
+            | MessageType::StorageRecolorGroup
+            | MessageType::StorageDeleteGroup
+            | MessageType::StorageExportMarkdown
+            | MessageType::StorageExportSqlite
+    )
 }
 
 fn iana_timezone() -> String {
@@ -404,6 +513,44 @@ fn panel_block(title: &str, focused: bool) -> Block<'_> {
         .border_style(border_style)
 }
 
+fn strip_md(s: &str) -> String {
+    s.replace("**", "").replace("__", "")
+}
+
+fn word_wrap(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![];
+    }
+    let mut result = Vec::new();
+    for raw_line in text.split('\n') {
+        let trimmed = raw_line.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.chars().count() <= width {
+            result.push(trimmed.to_string());
+            continue;
+        }
+        let mut cur = String::new();
+        for word in trimmed.split_whitespace() {
+            let word_len = word.chars().count();
+            if cur.is_empty() {
+                cur = word.to_string();
+            } else if cur.chars().count() + 1 + word_len <= width {
+                cur.push(' ');
+                cur.push_str(word);
+            } else {
+                result.push(cur);
+                cur = word.to_string();
+            }
+        }
+        if !cur.is_empty() {
+            result.push(cur);
+        }
+    }
+    result
+}
+
 fn render_chat(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let focused = state.app.focused_panel == Panel::Chat;
     let block = panel_block("Chat", focused);
@@ -416,21 +563,52 @@ fn render_chat(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         .constraints([Constraint::Min(1), Constraint::Length(3)])
         .split(inner);
 
-    // History
-    let items: Vec<ListItem> = state
-        .chat_history
-        .iter()
-        .map(|msg| {
-            let style = if msg.role == "agente" {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::Blue)
-            };
-            ListItem::new(format!("[{}] {}", msg.role, msg.text)).style(style)
-        })
-        .collect();
-    let list = List::new(items);
-    frame.render_widget(list, parts[0]);
+    let hist_area = parts[0];
+    let wrap_width = (hist_area.width as usize).saturating_sub(2);
+    let avail_height = hist_area.height as usize;
+
+    // Build display lines for all messages
+    let mut all_lines: Vec<Line<'static>> = Vec::new();
+    for msg in &state.chat_history {
+        let (label, color) = if msg.role == "agente" {
+            ("Agente", Color::Green)
+        } else if msg.role == "sistema" {
+            ("Sistema", Color::Yellow)
+        } else {
+            ("Tú", Color::Cyan)
+        };
+        let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+        let body_style = Style::default().fg(color);
+
+        let clean = strip_md(&msg.text);
+        let wrapped = word_wrap(&clean, wrap_width.saturating_sub(label.len() + 3));
+
+        let header = format!("[{label}]");
+        if wrapped.is_empty() {
+            all_lines.push(Line::from(Span::styled(header, style)));
+        } else {
+            // First line: [Label] first-text-line
+            all_lines.push(Line::from(vec![
+                Span::styled(format!("{header} "), style),
+                Span::styled(wrapped[0].clone(), body_style),
+            ]));
+            // Continuation lines indented by label+3 spaces
+            let indent = " ".repeat(header.chars().count() + 1);
+            for line in &wrapped[1..] {
+                all_lines.push(Line::from(Span::styled(
+                    format!("{indent}{line}"),
+                    body_style,
+                )));
+            }
+        }
+        // Blank separator between messages
+        all_lines.push(Line::from(""));
+    }
+
+    // Scroll to bottom: show only lines that fit
+    let start = all_lines.len().saturating_sub(avail_height);
+    let visible: Vec<Line<'static>> = all_lines[start..].to_vec();
+    frame.render_widget(Paragraph::new(visible), hist_area);
 
     // Input field
     let input_block = Block::default().title("Mensaje").borders(Borders::ALL);

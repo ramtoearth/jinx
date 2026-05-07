@@ -41,51 +41,92 @@ Reglas importantes:
 # Agent setup
 # ---------------------------------------------------------------------------
 
+def _make_builtin_tools() -> list[Any]:
+    """Return built-in tool functions.
+
+    Tries strands_tools first; falls back to minimal pure-Python stubs so the
+    agent can run without that optional package.
+    """
+    try:
+        from strands_tools import current_time, file_read, file_write, editor  # type: ignore[import]
+        return [current_time, file_read, file_write, editor]
+    except ImportError:
+        pass
+
+    # Minimal stubs registered as Strands tools via the @tool decorator
+    from strands import tool  # type: ignore[import]
+    import datetime, pathlib
+
+    @tool
+    def current_time(timezone: str = "UTC") -> str:  # type: ignore[misc]
+        """Return the current date and time in ISO 8601 format."""
+        return datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S+00:00"
+        )
+
+    @tool
+    def file_read(path: str) -> str:  # type: ignore[misc]
+        """Read the contents of a text file and return it as a string."""
+        return pathlib.Path(path).read_text(encoding="utf-8")
+
+    @tool
+    def file_write(path: str, content: str) -> str:  # type: ignore[misc]
+        """Write content to a text file, creating parent directories as needed."""
+        p = pathlib.Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return f"Written {len(content)} bytes to {path}"
+
+    @tool
+    def editor(path: str) -> str:  # type: ignore[misc]
+        """Return the contents of a file for editing (read-only stub)."""
+        return pathlib.Path(path).read_text(encoding="utf-8")
+
+    return [current_time, file_read, file_write, editor]
+
+
 def _build_agent(now_iso: str) -> Any:
     """Construct the Strands Agent with all tools registered."""
     try:
         from strands import Agent
-        from strands_tools import current_time, file_read, file_write, editor  # type: ignore[import]
     except ImportError as exc:
         raise RuntimeError(
-            f"strands-agents or strands-tools not installed: {exc}"
+            f"strands-agents not installed: {exc}"
         ) from exc
 
     from agent import storage_tools as st
     from agent.inference import infer_group_candidate
 
-    # Expose storage functions as tools by wrapping them
-    def _wrap(fn: Any) -> Any:
-        """Minimal Strands-compatible tool wrapper."""
-        return fn
-
-    tools = [
-        current_time,
-        file_read,
-        file_write,
-        editor,
-        _wrap(st.list_tasks),
-        _wrap(st.create_task),
-        _wrap(st.update_task),
-        _wrap(st.complete_task),
-        _wrap(st.delete_task),
-        _wrap(st.list_events),
-        _wrap(st.create_event),
-        _wrap(st.update_event),
-        _wrap(st.delete_event),
-        _wrap(st.list_groups),
-        _wrap(st.create_group),
-        _wrap(st.rename_group),
-        _wrap(st.recolor_group),
-        _wrap(st.delete_group),
-        _wrap(st.export_markdown),
-        _wrap(st.export_sqlite),
+    tools = _make_builtin_tools() + [
+        st.list_tasks,
+        st.create_task,
+        st.update_task,
+        st.complete_task,
+        st.delete_task,
+        st.list_events,
+        st.create_event,
+        st.update_event,
+        st.delete_event,
+        st.list_groups,
+        st.create_group,
+        st.rename_group,
+        st.recolor_group,
+        st.delete_group,
+        st.export_markdown,
+        st.export_sqlite,
         infer_group_candidate,
     ]
+
+    def _stderr_callback(**kwargs: Any) -> None:
+        chunk = kwargs.get("data", "")
+        if chunk:
+            sys.stderr.write(chunk)
+            sys.stderr.flush()
 
     agent = Agent(
         system_prompt=_SYSTEM_PROMPT.format(now=now_iso),
         tools=tools,
+        callback_handler=_stderr_callback,
     )
     return agent
 
@@ -96,12 +137,10 @@ def _build_agent(now_iso: str) -> Any:
 
 def _get_current_time(timezone: str = "UTC") -> str:
     """Get the current time in ISO 8601 format."""
-    try:
-        from strands_tools import current_time  # type: ignore[import]
-        return str(current_time(timezone=timezone))
-    except Exception:
-        import datetime
-        return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00"
+    )
 
 
 def main(

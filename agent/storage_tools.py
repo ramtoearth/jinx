@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from strands import tool  # type: ignore[import]
+
 from agent.ipc import StorageError, StdioClient
 
 # The global client instance is set by main.py before the Agent runs.
@@ -33,6 +35,8 @@ def _send(msg_type: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, 
 # Tasks
 # ---------------------------------------------------------------------------
 
+
+@tool
 def list_tasks(
     status: Optional[str] = None,
     group_id: Optional[int] = None,
@@ -53,6 +57,8 @@ def list_tasks(
     return result.get("tasks", [])
 
 
+
+@tool
 def create_task(
     title: str,
     priority: Optional[str] = None,
@@ -71,6 +77,8 @@ def create_task(
     return result["task"]
 
 
+
+@tool
 def update_task(
     id: int,
     title: Optional[str] = None,
@@ -95,12 +103,16 @@ def update_task(
     return result["task"]
 
 
+
+@tool
 def complete_task(id: int) -> Dict[str, Any]:
     """Mark a task as completed."""
     result = _send("storage.complete_task", {"id": id})
     return result["task"]
 
 
+
+@tool
 def delete_task(id: int) -> None:
     """Delete a task permanently."""
     _send("storage.delete_task", {"id": id})
@@ -110,6 +122,8 @@ def delete_task(id: int) -> None:
 # Events
 # ---------------------------------------------------------------------------
 
+
+@tool
 def list_events(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
@@ -127,6 +141,8 @@ def list_events(
     return result.get("events", [])
 
 
+
+@tool
 def create_event(
     title: str,
     start_date: str,
@@ -148,6 +164,8 @@ def create_event(
     return result["event"]
 
 
+
+@tool
 def update_event(
     id: int,
     title: Optional[str] = None,
@@ -172,6 +190,8 @@ def update_event(
     return result["event"]
 
 
+
+@tool
 def delete_event(id: int) -> None:
     """Delete a calendar event."""
     _send("storage.delete_event", {"id": id})
@@ -181,30 +201,40 @@ def delete_event(id: int) -> None:
 # Groups
 # ---------------------------------------------------------------------------
 
+
+@tool
 def list_groups() -> List[Dict[str, Any]]:
     """List all groups."""
     result = _send("storage.list_groups")
     return result.get("groups", [])
 
 
+
+@tool
 def create_group(name: str, color: str) -> Dict[str, Any]:
     """Create a new group (color as '#RRGGBB')."""
     result = _send("storage.create_group", {"name": name, "color": color})
     return result["group"]
 
 
+
+@tool
 def rename_group(id: int, name: str) -> Dict[str, Any]:
     """Rename a group."""
     result = _send("storage.rename_group", {"id": id, "name": name})
     return result["group"]
 
 
+
+@tool
 def recolor_group(id: int, color: str) -> Dict[str, Any]:
     """Change a group's colour."""
     result = _send("storage.recolor_group", {"id": id, "color": color})
     return result["group"]
 
 
+
+@tool
 def delete_group(id: int) -> None:
     """Delete a group (tasks/events lose their group_id)."""
     _send("storage.delete_group", {"id": id})
@@ -214,12 +244,16 @@ def delete_group(id: int) -> None:
 # Export
 # ---------------------------------------------------------------------------
 
+
+@tool
 def export_markdown(output_path: str) -> str:
     """Export all data to a Markdown file and return the written path."""
     result = _send("storage.export_markdown", {"output_path": output_path})
     return result["written_path"]
 
 
+
+@tool
 def export_sqlite(output_path: str) -> str:
     """Export all data to a SQLite file and return the written path."""
     result = _send("storage.export_sqlite", {"output_path": output_path})

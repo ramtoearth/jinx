@@ -11,6 +11,8 @@ from __future__ import annotations
 import unicodedata
 from typing import Optional
 
+from strands import tool  # type: ignore[import]
+
 
 # ---------------------------------------------------------------------------
 # Text normalisation
@@ -71,22 +73,11 @@ GroupsSnapshot = list[GroupInfo]
 # infer_group_candidate
 # ---------------------------------------------------------------------------
 
-def infer_group_candidate(
+def _infer_group_candidate_impl(
     message: str,
     groups_snapshot: GroupsSnapshot,
 ) -> tuple[Optional[int], float]:
-    """Return ``(group_id, score)`` for the best-matching Group.
-
-    If ``groups_snapshot`` is empty, returns ``(None, 0.0)``.
-
-    The algorithm:
-    1. Normalise the message.
-    2. For each Group build ``text(g) = normalize(name + " " + titles)``.
-    3. Compute Jaccard of trigrams between message and each Group text.
-    4. Select the Group with the maximum score; break ties by ascending id.
-
-    This function is deterministic and pure: same inputs → same output.
-    """
+    """Core inference logic over GroupInfo objects."""
     if not groups_snapshot:
         return None, 0.0
 
@@ -105,6 +96,30 @@ def infer_group_candidate(
             best_id = group.id
 
     return best_id, max(best_score, 0.0)
+
+
+@tool
+def infer_group_candidate(
+    message: str,
+    groups_snapshot: list[dict],
+) -> dict:
+    """Infer the best-matching Group for a natural-language message.
+
+    Each entry in ``groups_snapshot`` must have keys ``id`` (int), ``name``
+    (str), and ``member_titles`` (list of str).
+
+    Returns ``{"group_id": <int|null>, "score": <float>}``.
+    """
+    snapshot: GroupsSnapshot = [
+        GroupInfo(
+            id=int(g["id"]),
+            name=str(g["name"]),
+            member_titles=[str(t) for t in g.get("member_titles", [])],
+        )
+        for g in groups_snapshot
+    ]
+    gid, score = _infer_group_candidate_impl(message, snapshot)
+    return {"group_id": gid, "score": score}
 
 
 # ---------------------------------------------------------------------------

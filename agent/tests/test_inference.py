@@ -15,6 +15,7 @@ from agent.inference import (
     THRESHOLD_SUGGEST,
     GroupInfo,
     GroupsSnapshot,
+    _infer_group_candidate_impl,
     infer_group_candidate,
     ngrams,
     normalize,
@@ -88,8 +89,8 @@ def test_p4_deterministic_and_argmax(message: str, snapshot: GroupsSnapshot) -> 
     """infer_group_candidate is deterministic and returns the Jaccard argmax."""
     from agent.inference import jaccard, normalize as norm, ngrams as ng
 
-    result1 = infer_group_candidate(message, snapshot)
-    result2 = infer_group_candidate(message, snapshot)
+    result1 = _infer_group_candidate_impl(message, snapshot)
+    result2 = _infer_group_candidate_impl(message, snapshot)
 
     # Determinism: same call → same result
     assert result1 == result2, f"non-deterministic: {result1} != {result2}"
@@ -135,7 +136,7 @@ def test_p4_deterministic_and_argmax(message: str, snapshot: GroupsSnapshot) -> 
 @given(message=_MESSAGE_STRATEGY, snapshot=_SNAPSHOT_STRATEGY)
 def test_p5_threshold_routing(message: str, snapshot: GroupsSnapshot) -> None:
     """The action taken corresponds to the score's threshold interval."""
-    group_id, score = infer_group_candidate(message, snapshot)
+    group_id, score = _infer_group_candidate_impl(message, snapshot)
 
     if not snapshot or group_id is None:
         # No groups → propose creating a new one (score < THRESHOLD_SUGGEST)
@@ -163,7 +164,7 @@ def test_exact_name_match_scores_higher_than_unrelated() -> None:
         GroupInfo(id=1, name="trabajo", member_titles=["reunión de equipo"] * 10),
         GroupInfo(id=2, name="hobbies", member_titles=["pintura", "fotografía"] * 10),
     ]
-    group_id, score = infer_group_candidate(
+    group_id, score = _infer_group_candidate_impl(
         "trabajo trabajo trabajo trabajo trabajo trabajo trabajo", snapshot
     )
     assert group_id == 1, f"expected group 1 (trabajo), got {group_id}"
@@ -172,12 +173,12 @@ def test_exact_name_match_scores_higher_than_unrelated() -> None:
 
 def test_no_match_scores_low() -> None:
     snapshot = [GroupInfo(id=1, name="trabajo", member_titles=["reunión de equipo"])]
-    group_id, score = infer_group_candidate("zzz qwerty", snapshot)
+    group_id, score = _infer_group_candidate_impl("zzz qwerty", snapshot)
     assert score < THRESHOLD_SUGGEST, f"expected low score, got {score:.4f}"
 
 
 def test_empty_snapshot_returns_none() -> None:
-    group_id, score = infer_group_candidate("hola mundo", [])
+    group_id, score = _infer_group_candidate_impl("hola mundo", [])
     assert group_id is None
     assert score == 0.0
 
@@ -188,5 +189,19 @@ def test_tie_broken_by_lower_id() -> None:
         GroupInfo(id=2, name="x", member_titles=[]),
         GroupInfo(id=1, name="x", member_titles=[]),
     ]
-    group_id, _ = infer_group_candidate("x", snapshot)
+    group_id, _ = _infer_group_candidate_impl("x", snapshot)
     assert group_id == 1, "tie-breaking must prefer the group with lower id"
+
+
+def test_tool_interface_returns_dict() -> None:
+    """Public @tool interface accepts list[dict] and returns dict."""
+    groups = [
+        {"id": 1, "name": "trabajo", "member_titles": ["reunión", "proyecto"]},
+        {"id": 2, "name": "hobbies", "member_titles": ["música"]},
+    ]
+    result = infer_group_candidate("trabajo reunión", groups)
+    assert isinstance(result, dict)
+    assert "group_id" in result
+    assert "score" in result
+    assert result["group_id"] == 1
+    assert result["score"] > 0.0
