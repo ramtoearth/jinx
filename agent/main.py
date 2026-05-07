@@ -6,6 +6,7 @@ Tasks 7.3–7.5 (Requisitos 5.1, 5.2, 5.3, 9.3, 9.4, 12.3).
 
 from __future__ import annotations
 
+import os
 import sys
 import uuid
 from typing import Any
@@ -44,7 +45,7 @@ Reglas importantes:
 # Agent setup
 # ---------------------------------------------------------------------------
 
-def _build_agent(now_iso: str) -> Any:
+def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
     """Construct the Strands Agent with all tools registered."""
     try:
         from strands import Agent
@@ -53,8 +54,18 @@ def _build_agent(now_iso: str) -> Any:
             f"strands-agents not installed: {exc}"
         ) from exc
 
+    from strands.models.ollama import OllamaModel  # type: ignore[import]
     from agent import storage_tools as st
     from agent.inference import infer_group_candidate
+
+    if model_provider == "local":
+        model: Any = OllamaModel(
+            model_id=os.environ.get("OLLAMA_MODEL", "llama3.2:3b"),
+            host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+            max_tokens=4096,
+        )
+    else:
+        model = None  # Strands usa su proveedor por defecto (Bedrock)
 
     tools = _BUILTIN_TOOLS + [
         st.list_tasks,
@@ -84,6 +95,7 @@ def _build_agent(now_iso: str) -> Any:
 
     agent = Agent(
         system_prompt=_SYSTEM_PROMPT.format(now=now_iso),
+        model=model,
         tools=tools,
         callback_handler=_stderr_callback,
     )
@@ -129,8 +141,11 @@ def main(
             return
 
     # Send agent_init_ack
-    provider_notice = None
-    if model_provider == "remote":
+    provider_notice: str | None = None
+    if model_provider == "local":
+        ollama_model_name = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+        provider_notice = f"Agente usando Ollama local ({ollama_model_name}). Sin envío de datos a la nube."
+    elif model_provider == "remote":
         provider_notice = (
             "Aviso: el Agente está usando un proveedor de modelo remoto. "
             "Los mensajes del chat se envían a un servicio externo."
@@ -147,7 +162,7 @@ def main(
 
     # Build the agent with the current time
     now_iso = _get_current_time(timezone)
-    agent = _build_agent(now_iso)
+    agent = _build_agent(now_iso, model_provider=model_provider)
 
     # Turn loop
     for env in client.incoming_lines():
