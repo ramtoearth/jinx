@@ -65,7 +65,12 @@ def _build_agent(now_iso: str, model_provider: str = "local") -> Any:
             max_tokens=4096,
         )
     else:
-        model = None  # Strands usa su proveedor por defecto (Bedrock)
+        bedrock_model_id = os.environ.get("BEDROCK_MODEL_ID")
+        if bedrock_model_id:
+            from strands.models import BedrockModel  # type: ignore[import]
+            model = BedrockModel(model_id=bedrock_model_id)
+        else:
+            model = None  # Strands usa el modelo Bedrock por defecto
 
     tools = _BUILTIN_TOOLS + [
         st.list_tasks,
@@ -140,14 +145,19 @@ def main(
         if msg_type == "shutdown":
             return
 
+    # Env var overrides the TUI's model_provider — allows switching without recompiling.
+    # MODEL_PROVIDER=remote → Bedrock   MODEL_PROVIDER=local (default) → Ollama
+    model_provider = os.environ.get("MODEL_PROVIDER", model_provider)
+
     # Send agent_init_ack
     provider_notice: str | None = None
     if model_provider == "local":
         ollama_model_name = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
         provider_notice = f"Agente usando Ollama local ({ollama_model_name}). Sin envío de datos a la nube."
     elif model_provider == "remote":
+        bedrock_name = os.environ.get("BEDROCK_MODEL_ID", "default")
         provider_notice = (
-            "Aviso: el Agente está usando un proveedor de modelo remoto. "
+            f"Agente usando Amazon Bedrock ({bedrock_name}). "
             "Los mensajes del chat se envían a un servicio externo."
         )
 
