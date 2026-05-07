@@ -2,6 +2,8 @@
 
 Organizador de día en terminal. Gestiona tareas, eventos y grupos usando lenguaje natural. El agente de IA corre localmente con [Ollama](https://ollama.com) — tus datos no salen de tu máquina.
 
+![Demo](assets/demoCLItasks.gif)
+
 ## Instalación rápida
 
 ### macOS y Linux
@@ -71,6 +73,31 @@ model_id = ""
 
 Edita el archivo y reinicia la app para aplicar los cambios.
 
+## Configuración con Amazon Bedrock
+
+Para usar modelos en AWS en lugar de Ollama:
+
+**1. Autentícate con AWS CLI v2** (versión 2.32.0 o superior):
+
+```bash
+aws login
+```
+
+Esto abre el navegador para iniciar sesión con tus credenciales de consola AWS. Las credenciales temporales se guardan automáticamente y se renuevan durante hasta 12 horas. Consulta la [documentación oficial](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html) para más detalles.
+
+**2. Activa el modelo en Bedrock** (Amazon Bedrock → Model access) en la región que vayas a usar.
+
+**3. Edita el archivo de configuración** de jinx:
+
+```toml
+provider = "remote"
+
+[remote]
+model_id = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+```
+
+Reinicia jinx para aplicar los cambios.
+
 ## Compilar desde el código fuente
 
 Si prefieres compilar tú mismo:
@@ -82,32 +109,3 @@ git clone https://github.com/ramtoearth/jinx
 cd jinx
 cargo install --path tui
 ```
-
-## Uso
-
-| Tecla | Acción |
-|-------|--------|
-| `Tab` / `Shift+Tab` | Cambiar panel activo |
-| `Ctrl+Q` | Salir |
-| **En Panel Tareas** | |
-| `n` | Nueva tarea |
-| `e` | Editar tarea seleccionada |
-| `c` | Marcar como completada |
-| `d` | Eliminar (pide confirmación) |
-| `g` | Nuevo grupo |
-| **En Panel Calendario** | |
-| `n` | Nuevo evento |
-| `e` | Editar evento seleccionado |
-| `d` | Eliminar evento |
-| **En Panel Chat** | |
-| `Enter` | Enviar mensaje al agente |
-| `Ctrl+L` | Limpiar campo de texto |
-
-El log del agente se guarda en el directorio temporal del sistema (`/tmp/tui_agent.log` en Unix, `%TEMP%\tui_agent.log` en Windows).
-
-## Dependencias principales
-
-- [Strands Agents](https://strandsagents.com) — framework de agentes de IA en Python
-- [strands-agents-tools](https://github.com/strands-agents/tools) — herramientas built-in
-- [Ratatui](https://ratatui.rs) — interfaz de terminal en Rust
-- [Ollama](https://ollama.com) — servidor local de modelos de lenguaje
