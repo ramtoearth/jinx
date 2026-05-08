@@ -66,6 +66,7 @@ pub enum Modal {
     DeleteGroup { id: i64 },
     Export,
     Error { message: String },
+    Settings,
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +199,11 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> AppState {
                 KeyCode::BackTab => {
                     if state.modal.is_none() {
                         state.focused_panel = state.focused_panel.prev();
+                    }
+                }
+                KeyCode::Char(',') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if state.modal.is_none() {
+                        state.modal = Some(Modal::Settings);
                     }
                 }
                 _ => {
