@@ -53,6 +53,10 @@ static MIGRATIONS: &[&str] = &[
     CREATE INDEX IF NOT EXISTS idx_events_start_date     ON events(start_date);
     CREATE INDEX IF NOT EXISTS idx_events_group          ON events(group_id);
     "#,
+    // Migration 2: seed the Default group so the agent always has a fallback
+    r#"
+    INSERT OR IGNORE INTO groups (name, color) VALUES ('Default', '#6C757D');
+    "#,
 ];
 
 fn apply_migrations(conn: &Connection) -> Result<(), StorageError> {
