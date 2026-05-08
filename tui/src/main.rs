@@ -341,8 +341,8 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         _ => {}
     }
 
-    // Ctrl+, opens the settings modal from any panel
-    if key.code == KeyCode::Char(',') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    // Ctrl+P opens the settings modal from any panel
+    if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
         open_settings_modal(state);
         return;
     }

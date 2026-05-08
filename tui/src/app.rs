@@ -201,7 +201,7 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> AppState {
                         state.focused_panel = state.focused_panel.prev();
                     }
                 }
-                KeyCode::Char(',') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     if state.modal.is_none() {
                         state.modal = Some(Modal::Settings);
                     }
