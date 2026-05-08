@@ -267,7 +267,8 @@ proptest! {
             other => prop_assert!(false, "expected NotFound, got {other:?}"),
         }
         let groups = s.list_groups().unwrap();
-        prop_assert!(groups.is_empty());
+        // Migration 2 seeds a "Default" group, so a fresh DB is never empty.
+        prop_assert_eq!(groups.len(), 1, "only the Default group should exist");
     }
 }
 
@@ -333,6 +334,8 @@ impl Drop for TempDir {
 proptest! {
     #[test]
     fn p16_group_name_unique(name in arb_title(), color1 in arb_hex(), color2 in arb_hex()) {
+        // Skip if the generated name collides with the seeded Default group.
+        prop_assume!(name != "Default");
         let s = db();
         s.create_group(NewGroup { name: name.clone(), color: color1 }).unwrap();
         let result = s.create_group(NewGroup { name: name.clone(), color: color2 });
@@ -340,9 +343,9 @@ proptest! {
             Err(StorageError::GroupNameNotUnique(_)) => {}
             other => prop_assert!(false, "expected GroupNameNotUnique, got {other:?}"),
         }
-        // Only one group in the store
+        // Default (seeded) + the one we created = 2 groups total.
         let groups = s.list_groups().unwrap();
-        prop_assert_eq!(groups.len(), 1);
+        prop_assert_eq!(groups.len(), 2);
     }
 }
 

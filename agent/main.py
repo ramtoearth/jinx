@@ -41,7 +41,7 @@ Reglas importantes:
 - Grupos al crear Tarea o Evento:
     * Llama a ``list_groups`` para ver los grupos disponibles y elige el más apropiado por contexto.
     * Si el usuario menciona un nombre de grupo, busca su id en la lista y úsalo.
-    * Si ningún grupo encaja claramente, usa group_id null.
+    * Si ningún grupo encaja claramente, usa el grupo llamado "Default" (busca su id en la lista).
     * NUNCA rechaces crear una Tarea o Evento por no poder determinar el Grupo.
 - Responde siempre en el idioma del usuario.
 """

@@ -287,13 +287,15 @@ pub fn import_sqlite(
     };
 
     // Insert in dependency order: groups → tasks → events
+    // GroupNameNotUnique is silently skipped: the group already exists in the
+    // destination (e.g. the "Default" group seeded by migration 2).
     for (_, name, color) in &groups {
         let hex = crate::HexColor::new(color.clone())
             .map_err(StorageError::ValidationFailed)?;
-        target.create_group(crate::NewGroup {
-            name: name.clone(),
-            color: hex,
-        })?;
+        match target.create_group(crate::NewGroup { name: name.clone(), color: hex }) {
+            Ok(_) | Err(StorageError::GroupNameNotUnique(_)) => {}
+            Err(e) => return Err(e),
+        }
     }
 
     for (_, title, priority_str, _status, created_at, deadline, group_id) in &tasks_raw {
