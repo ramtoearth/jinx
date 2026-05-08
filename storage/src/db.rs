@@ -57,6 +57,13 @@ static MIGRATIONS: &[&str] = &[
     r#"
     INSERT OR IGNORE INTO groups (name, color) VALUES ('Default', '#6C757D');
     "#,
+    // Migration 3: remove the Default group seeded by V2 if no data references it
+    r#"
+    DELETE FROM groups
+    WHERE name = 'Default'
+      AND id NOT IN (SELECT group_id FROM tasks  WHERE group_id IS NOT NULL)
+      AND id NOT IN (SELECT group_id FROM events WHERE group_id IS NOT NULL);
+    "#,
 ];
 
 fn apply_migrations(conn: &Connection) -> Result<(), StorageError> {

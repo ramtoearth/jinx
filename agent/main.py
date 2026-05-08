@@ -38,11 +38,8 @@ Reglas importantes:
   convierte siempre a una fecha/hora absoluta en ISO 8601 antes de llamar a cualquier herramienta.
 - Si no puedes resolver de forma unívoca una referencia temporal, pide aclaración antes de persistir.
 - Sólo llamas a herramientas de almacenamiento con valores absolutos, nunca con referencias relativas.
-- Grupos al crear Tarea o Evento:
-    * Llama a ``list_groups`` para ver los grupos disponibles y elige el más apropiado por contexto.
-    * Si el usuario menciona un nombre de grupo, busca su id en la lista y úsalo.
-    * Si ningún grupo encaja claramente, usa el grupo llamado "Default" (busca su id en la lista).
-    * NUNCA rechaces crear una Tarea o Evento por no poder determinar el Grupo.
+- Grupos: asigna group_id SOLO si el usuario menciona explícitamente un grupo por nombre.
+  Si no lo menciona, omite group_id (null). Nunca preguntes al usuario por el grupo.
 - Responde siempre en el idioma del usuario.
 """
 
