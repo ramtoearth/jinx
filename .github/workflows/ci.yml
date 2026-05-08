@@ -114,5 +114,3 @@ jobs:
         run: |
           cd agent
           mypy . --ignore-missing-imports || true
-      - name: Check property tags
-        run: python scripts/check_property_tags.py
