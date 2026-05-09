@@ -89,6 +89,17 @@ host = "http://localhost:11434"
 model_id = ""
 "#;
 
+/// Persist `cfg` back to `config_path()`, overwriting the file.
+pub fn save(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let toml_str = toml::to_string_pretty(cfg)?;
+    std::fs::write(&path, toml_str)?;
+    Ok(())
+}
+
 /// Load the config file, creating it with defaults if it does not exist.
 /// Parse errors fall back to defaults and are logged to stderr — the app
 /// should never crash just because the config file has a typo.

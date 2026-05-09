@@ -149,6 +149,14 @@ struct GroupFormState {
     error: Option<String>,
 }
 
+#[derive(Default, Clone)]
+struct SettingsFormState {
+    field: usize,         // 0=provider, 1=model, 2=host (host only when local)
+    provider_idx: usize,  // 0=Local, 1=Remote
+    model_input: String,
+    host_input: String,
+}
+
 impl GroupFormState {
     fn effective_color(&self) -> &str {
         if !self.color_custom.is_empty() {
@@ -219,6 +227,7 @@ struct RuntimeState {
     task_form: TaskFormState,
     event_form: EventFormState,
     group_form: GroupFormState,
+    settings_form: SettingsFormState,
     groups_cache: Vec<Group>,
     delete_confirm_name: String,
 }
@@ -247,6 +256,7 @@ fn run_app(
         task_form: TaskFormState::default(),
         event_form: EventFormState::default(),
         group_form: GroupFormState::default(),
+        settings_form: SettingsFormState::default(),
         groups_cache: Vec::new(),
         delete_confirm_name: String::new(),
     };
@@ -329,6 +339,12 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
             return;
         }
         _ => {}
+    }
+
+    // Ctrl+P opens the settings modal from any panel
+    if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        open_settings_modal(state);
+        return;
     }
 
     if state.app.is_too_small() {
@@ -547,6 +563,101 @@ fn open_edit_group_modal(state: &mut RuntimeState, id: i64) {
     }
 }
 
+fn open_settings_modal(state: &mut RuntimeState) {
+    let cfg = app_config::load();
+    state.settings_form = SettingsFormState {
+        provider_idx: if cfg.provider == app_config::Provider::Local { 0 } else { 1 },
+        model_input: match &cfg.provider {
+            app_config::Provider::Local => cfg.local.model.clone(),
+            app_config::Provider::Remote => cfg.remote.model_id.clone(),
+        },
+        host_input: cfg.local.host.clone(),
+        field: 0,
+    };
+    state.app.modal = Some(Modal::Settings);
+}
+
+fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    let is_local = state.settings_form.provider_idx == 0;
+    let n_fields = if is_local { 3 } else { 2 };
+    match key.code {
+        KeyCode::Tab => {
+            state.settings_form.field = (state.settings_form.field + 1) % n_fields;
+        }
+        KeyCode::BackTab => {
+            state.settings_form.field = (state.settings_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Left | KeyCode::Right if state.settings_form.field == 0 => {
+            state.settings_form.provider_idx = 1 - state.settings_form.provider_idx;
+            // Clamp field when switching to Remote (only 2 fields)
+            if state.settings_form.provider_idx == 1 && state.settings_form.field >= 2 {
+                state.settings_form.field = 1;
+            }
+        }
+        KeyCode::Char(c) => match state.settings_form.field {
+            1 => state.settings_form.model_input.push(c),
+            2 => state.settings_form.host_input.push(c),
+            _ => {}
+        },
+        KeyCode::Backspace => match state.settings_form.field {
+            1 => { state.settings_form.model_input.pop(); }
+            2 => { state.settings_form.host_input.pop(); }
+            _ => {}
+        },
+        KeyCode::Enter => save_settings(state),
+        KeyCode::Esc => state.app.modal = None,
+        _ => {}
+    }
+}
+
+fn save_settings(state: &mut RuntimeState) {
+    let is_local = state.settings_form.provider_idx == 0;
+    let defaults = app_config::Config::default();
+    let cfg = app_config::Config {
+        provider: if is_local {
+            app_config::Provider::Local
+        } else {
+            app_config::Provider::Remote
+        },
+        local: app_config::LocalConfig {
+            model: if is_local {
+                state.settings_form.model_input.trim().to_string()
+            } else {
+                defaults.local.model
+            },
+            host: if is_local {
+                let h = state.settings_form.host_input.trim().to_string();
+                if h.is_empty() { defaults.local.host } else { h }
+            } else {
+                defaults.local.host
+            },
+        },
+        remote: app_config::RemoteConfig {
+            model_id: if !is_local {
+                state.settings_form.model_input.trim().to_string()
+            } else {
+                String::new()
+            },
+        },
+    };
+    if let Err(e) = app_config::save(&cfg) {
+        state.app.status_bar = format!("Error guardando config: {e}");
+        return;
+    }
+    state.app.modal = None;
+    restart_agent(state);
+    state.app.status_bar = "Configuración guardada. Agente reiniciado.".to_string();
+}
+
+fn restart_agent(state: &mut RuntimeState) {
+    send_shutdown(state);
+    state.agent_stdin = None;
+    state.agent_child = None;
+    state.agent_rx = None;
+    state.app.agent_alive = false;
+    spawn_agent(state);
+}
+
 // ---------------------------------------------------------------------------
 // Modal key handler dispatcher
 // ---------------------------------------------------------------------------
@@ -575,6 +686,7 @@ fn handle_modal_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
+        Some(Modal::Settings) => handle_settings_form_key(state, key),
         _ => { if key.code == KeyCode::Esc { state.app.modal = None; } }
     }
 }
@@ -1122,6 +1234,7 @@ fn render_modal(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         Some(Modal::DeleteTask { .. }) | Some(Modal::DeleteEvent { .. }) | Some(Modal::DeleteGroup { .. }) => {
             render_delete_confirm(frame, state, popup);
         }
+        Some(Modal::Settings) => render_settings_form(frame, state, popup),
         _ => {}
     }
 }
@@ -1272,6 +1385,38 @@ fn render_delete_confirm(frame: &mut ratatui::Frame, state: &RuntimeState, area:
             Style::default().fg(Color::DarkGray),
         )),
     ];
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_settings_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    let form = &state.settings_form;
+    let is_local = form.provider_idx == 0;
+    let block = Block::default()
+        .title("Configuración")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let provider_label = if is_local { "← Local →" } else { "← Remote →" };
+    let model_label = if is_local { "Modelo Ollama" } else { "Modelo Bedrock" };
+
+    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+    lines.push(form_line("Proveedor", provider_label.to_string(), form.field == 0));
+    lines.push(form_line(model_label, form.model_input.clone(), form.field == 1));
+    if is_local {
+        let host_display = if form.host_input.is_empty() {
+            "http://localhost:11434".to_string()
+        } else {
+            form.host_input.clone()
+        };
+        lines.push(form_line("Host Ollama", host_display, form.field == 2));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Tab:campo  ←/→:proveedor  Enter:guardar  Esc:cancelar",
+        Style::default().fg(Color::DarkGray),
+    )));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
