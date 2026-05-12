@@ -64,6 +64,21 @@ static MIGRATIONS: &[&str] = &[
       AND id NOT IN (SELECT group_id FROM tasks  WHERE group_id IS NOT NULL)
       AND id NOT IN (SELECT group_id FROM events WHERE group_id IS NOT NULL);
     "#,
+    // Migration 4: enforce case-insensitive uniqueness on group names.
+    // Remove duplicates keeping the lowest id, then recreate table with COLLATE NOCASE.
+    r#"
+    DELETE FROM groups WHERE id NOT IN (
+        SELECT MIN(id) FROM groups GROUP BY LOWER(name)
+    );
+    CREATE TABLE groups_new (
+        id    INTEGER PRIMARY KEY AUTOINCREMENT,
+        name  TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        color TEXT    NOT NULL
+    );
+    INSERT INTO groups_new (id, name, color) SELECT id, name, color FROM groups;
+    DROP TABLE groups;
+    ALTER TABLE groups_new RENAME TO groups;
+    "#,
 ];
 
 fn apply_migrations(conn: &Connection) -> Result<(), StorageError> {
@@ -527,6 +542,27 @@ impl Storage for SqliteStorage {
             groups.push(row.map_err(StorageError::from)?);
         }
         Ok(groups)
+    }
+
+    fn find_group_by_name(&self, name: &str) -> Result<Option<Group>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn
+            .query_row(
+                "SELECT id, name, color FROM groups WHERE name = ?1 COLLATE NOCASE",
+                params![name],
+                |row| {
+                    Ok(Group {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        color: HexColor::new(
+                            &row.get::<_, String>(2)?
+                        ).unwrap_or_else(|_| HexColor::new("#000000").unwrap()),
+                    })
+                },
+            )
+            .optional()
+            .map_err(StorageError::from)?;
+        Ok(result)
     }
 
     fn create_group(&self, input: NewGroup) -> Result<Group, StorageError> {

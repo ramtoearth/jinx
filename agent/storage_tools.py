@@ -262,6 +262,22 @@ def list_groups() -> List[Dict[str, Any]]:
 
 
 @tool
+def find_group_by_name(name: str) -> Optional[Dict[str, Any]]:
+    """Find a group by name (case-insensitive). Returns the group dict or None.
+
+    ALWAYS call this before create_task/create_event when the user mentions a group name,
+    to resolve the group name to its ID. Never guess a group_id.
+    """
+    result = _send("storage.list_groups")
+    groups = result.get("groups", [])
+    name_lower = name.lower()
+    for g in groups:
+        if g.get("name", "").lower() == name_lower:
+            return g
+    return None
+
+
+@tool
 def create_group(name: str, color: str) -> Dict[str, Any]:
     """Create a new group (color as '#RRGGBB')."""
     result = _send("storage.create_group", {"name": name, "color": color})

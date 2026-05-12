@@ -16,7 +16,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -41,6 +41,7 @@ use jinx::ipc::{
     ModelProvider, UserMessagePayload,
 };
 use jinx::proximos::{add_24h, proximos};
+use jinx::text_editor::TextEditor;
 
 // ---------------------------------------------------------------------------
 // Platform-aware log path
@@ -107,6 +108,8 @@ struct ChatMsg {
 // ---------------------------------------------------------------------------
 // Modal form state
 // ---------------------------------------------------------------------------
+
+const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 const COLOR_PRESETS: [&str; 16] = [
     "#e74c3c", "#e67e22", "#f1c40f", "#2ecc71",
@@ -190,7 +193,7 @@ fn main() -> io::Result<()> {
     // -- Terminal setup ----------------------------------------------------
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -198,7 +201,7 @@ fn main() -> io::Result<()> {
 
     // -- Cleanup -----------------------------------------------------------
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableBracketedPaste)?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {
@@ -214,7 +217,8 @@ fn main() -> io::Result<()> {
 struct RuntimeState {
     app: AppState,
     chat_history: Vec<ChatMsg>,
-    chat_input: String,
+    chat_editor: TextEditor,
+    chat_scroll: usize, // lines from bottom; 0 = pinned to bottom
     task_cursor: usize,
     calendar_cursor: usize,
     group_cursor: usize,
@@ -230,6 +234,10 @@ struct RuntimeState {
     settings_form: SettingsFormState,
     groups_cache: Vec<Group>,
     delete_confirm_name: String,
+    // Layout rects for mouse hit-testing
+    panel_area: Option<Rect>,
+    input_area: Option<Rect>,
+    history_area: Option<Rect>,
 }
 
 fn run_app(
@@ -244,7 +252,8 @@ fn run_app(
     let mut state = RuntimeState {
         app: AppState::new(size_cols, size_rows),
         chat_history: Vec::new(),
-        chat_input: String::new(),
+        chat_editor: TextEditor::new(),
+        chat_scroll: 0,
         task_cursor: 0,
         calendar_cursor: 0,
         group_cursor: 0,
@@ -259,6 +268,9 @@ fn run_app(
         settings_form: SettingsFormState::default(),
         groups_cache: Vec::new(),
         delete_confirm_name: String::new(),
+        panel_area: None,
+        input_area: None,
+        history_area: None,
     };
 
     // Spawn agent
@@ -270,7 +282,7 @@ fn run_app(
 
     loop {
         // --- Render -------------------------------------------------------
-        terminal.draw(|f| render(f, &state))?;
+        terminal.draw(|f| render(f, &mut state))?;
 
         // --- Drain agent output every iteration (non-blocking) ------------
         read_agent_output(&mut state);
@@ -291,6 +303,12 @@ fn run_app(
                     }
 
                     handle_key(&mut state, key);
+                }
+                Event::Mouse(mouse) => {
+                    handle_mouse(&mut state, mouse);
+                }
+                Event::Paste(data) => {
+                    handle_paste(&mut state, data);
                 }
                 Event::Resize(cols, rows) => {
                     state.app = jinx::app::reduce(state.app, AppEvent::Resize(cols, rows));
@@ -362,24 +380,186 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
 fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     match key.code {
         KeyCode::Enter => {
-            let text = state.chat_input.trim().to_string();
-            if text.is_empty() {
+            let text = state.chat_editor.to_string();
+            let trimmed = text.trim().to_string();
+            if trimmed.is_empty() {
                 state.app.status_bar = "Mensaje vacío, escribe algo para enviar.".to_string();
                 return;
             }
-            state.chat_history.push(ChatMsg { role: "usuario", text: text.clone() });
-            state.chat_input.clear();
-            send_user_message(state, text);
+            state.chat_history.push(ChatMsg { role: "usuario", text: trimmed.clone() });
+            state.chat_editor.clear();
+            state.chat_scroll = 0;
+            send_user_message(state, trimmed);
         }
-        KeyCode::Backspace => {
-            state.chat_input.pop();
+        // Ctrl+J inserts newline (does NOT send)
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.chat_editor.insert_newline();
+        }
+        // Chat history scroll (Shift+arrows)
+        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            state.chat_scroll = state.chat_scroll.saturating_add(3);
+        }
+        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            state.chat_scroll = state.chat_scroll.saturating_sub(3);
+        }
+        // Navigation
+        KeyCode::Left => state.chat_editor.move_left(),
+        KeyCode::Right => state.chat_editor.move_right(),
+        KeyCode::Up => state.chat_editor.move_up(),
+        KeyCode::Down => state.chat_editor.move_down(),
+        // Readline shortcuts
+        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.chat_editor.move_home();
+        }
+        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.chat_editor.move_end();
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.chat_editor.kill_to_start();
+        }
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.chat_editor.kill_to_end();
+        }
+        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.chat_editor.kill_word_back();
         }
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            state.chat_input.clear();
+            state.chat_editor.clear();
         }
+        // Alt+B / Alt+F — word movement (Option on macOS emits ALT)
+        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
+            state.chat_editor.move_word_back();
+        }
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
+            state.chat_editor.move_word_forward();
+        }
+        KeyCode::Backspace => state.chat_editor.backspace(),
+        KeyCode::Delete => state.chat_editor.delete(),
+        // Chat history scroll
+        KeyCode::PageUp if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            // Jump to top
+            state.chat_scroll = usize::MAX; // clamped during render
+        }
+        KeyCode::PageDown if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            state.chat_scroll = 0;
+        }
+        KeyCode::PageUp => {
+            state.chat_scroll = state.chat_scroll.saturating_add(10);
+        }
+        KeyCode::PageDown => {
+            state.chat_scroll = state.chat_scroll.saturating_sub(10);
+        }
+        // Regular character input
         KeyCode::Char(c) => {
-            state.chat_input.push(c);
+            state.chat_editor.insert_char(c);
         }
+        _ => {}
+    }
+}
+
+fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
+    if state.app.is_too_small() || state.app.modal.is_some() {
+        return;
+    }
+    let (col, row) = (mouse.column, mouse.row);
+    match mouse.kind {
+        MouseEventKind::ScrollUp => {
+            if let Some(hist) = state.history_area {
+                if col >= hist.x && col < hist.x + hist.width && row >= hist.y && row < hist.y + hist.height {
+                    state.chat_scroll = state.chat_scroll.saturating_add(3);
+                    return;
+                }
+            }
+            if let Some(input) = state.input_area {
+                if col >= input.x && col < input.x + input.width && row >= input.y && row < input.y + input.height {
+                    // Input scroll: move cursor up
+                    state.chat_editor.move_up();
+                    return;
+                }
+            }
+            // If scroll happens over the full panel area, determine panel by current tab
+            match state.app.focused_panel {
+                Panel::Tareas => { if state.task_cursor > 0 { state.task_cursor -= 1; } }
+                Panel::Calendario => { if state.calendar_cursor > 0 { state.calendar_cursor -= 1; } }
+                Panel::Proximos => { if state.group_cursor > 0 { state.group_cursor -= 1; } }
+                _ => { state.chat_scroll = state.chat_scroll.saturating_add(3); }
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            if let Some(hist) = state.history_area {
+                if col >= hist.x && col < hist.x + hist.width && row >= hist.y && row < hist.y + hist.height {
+                    state.chat_scroll = state.chat_scroll.saturating_sub(3);
+                    return;
+                }
+            }
+            if let Some(input) = state.input_area {
+                if col >= input.x && col < input.x + input.width && row >= input.y && row < input.y + input.height {
+                    state.chat_editor.move_down();
+                    return;
+                }
+            }
+            match state.app.focused_panel {
+                Panel::Tareas => {
+                    let count = state.storage.list_tasks(TaskFilter { status: Some(TaskStatus::Pendiente), ..Default::default() }).unwrap_or_default().len();
+                    if state.task_cursor + 1 < count { state.task_cursor += 1; }
+                }
+                Panel::Calendario => {
+                    let count = state.storage.list_events(None, None).unwrap_or_default().len();
+                    if state.calendar_cursor + 1 < count { state.calendar_cursor += 1; }
+                }
+                Panel::Proximos => {
+                    let count = state.storage.list_groups().unwrap_or_default().len();
+                    if state.group_cursor + 1 < count { state.group_cursor += 1; }
+                }
+                _ => { state.chat_scroll = state.chat_scroll.saturating_sub(3); }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_paste(state: &mut RuntimeState, data: String) {
+    if state.app.modal.is_some() {
+        handle_modal_paste(state, &data);
+        return;
+    }
+    if state.app.focused_panel != Panel::Chat {
+        return;
+    }
+    for c in data.chars() {
+        if c == '\n' || c == '\r' {
+            state.chat_editor.insert_newline();
+        } else {
+            state.chat_editor.insert_char(c);
+        }
+    }
+}
+
+fn handle_modal_paste(state: &mut RuntimeState, data: &str) {
+    let clean: String = data.chars().filter(|&c| c != '\n' && c != '\r').collect();
+    match &state.app.modal {
+        Some(Modal::NewTask) | Some(Modal::EditTask { .. }) => match state.task_form.field {
+            0 => state.task_form.title.push_str(&clean),
+            2 => state.task_form.deadline.push_str(&clean),
+            _ => {}
+        },
+        Some(Modal::NewEvent) | Some(Modal::EditEvent { .. }) => match state.event_form.field {
+            0 => state.event_form.title.push_str(&clean),
+            1 => state.event_form.start_date.push_str(&clean),
+            2 => state.event_form.start_time.push_str(&clean),
+            3 => state.event_form.duration.push_str(&clean),
+            _ => {}
+        },
+        Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => match state.group_form.field {
+            0 => state.group_form.name.push_str(&clean),
+            1 => state.group_form.color_custom.push_str(&clean),
+            _ => {}
+        },
+        Some(Modal::Settings) => match state.settings_form.field {
+            1 => state.settings_form.model_input.push_str(&clean),
+            2 => state.settings_form.host_input.push_str(&clean),
+            _ => {}
+        },
         _ => {}
     }
 }
@@ -1086,6 +1266,7 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
         MessageType::AgentReply => {
             if let Ok(Some(p)) = env.payload_as::<AgentReplyPayload>() {
                 state.chat_history.push(ChatMsg { role: "agente", text: p.text });
+                state.chat_scroll = 0; // auto-scroll to bottom on new message
             }
             state.pending_request = None;
             state.app.status_bar = "Listo.".to_string();
@@ -1134,7 +1315,7 @@ fn iana_timezone() -> String {
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn render(frame: &mut ratatui::Frame, state: &RuntimeState) {
+fn render(frame: &mut ratatui::Frame, state: &mut RuntimeState) {
     let size = frame.area();
 
     // Viewport guard
@@ -1160,6 +1341,7 @@ fn render(frame: &mut ratatui::Frame, state: &RuntimeState) {
 
     render_tabs(frame, state, chunks[0]);
 
+    state.panel_area = Some(chunks[1]);
     match state.app.focused_panel {
         Panel::Chat => render_chat(frame, state, chunks[1]),
         Panel::Tareas => render_tareas(frame, state, chunks[1]),
@@ -1458,18 +1640,27 @@ fn word_wrap(text: &str, width: usize) -> Vec<String> {
     result
 }
 
-fn render_chat(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
     let block = panel_block("Chat");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Split inner: history (top) + input (bottom 3 lines)
+    // Calculate dynamic input height based on editor content
+    let input_width = inner.width.saturating_sub(2) as usize; // account for borders
+    let visual_lines = count_visual_lines(&state.chat_editor, input_width);
+    let min_input_height: u16 = 3;
+    let max_input_height: u16 = 8.min((inner.height * 40 / 100).max(3));
+    let input_height = (visual_lines as u16 + 2) // +2 for border
+        .max(min_input_height)
+        .min(max_input_height);
+
     let parts = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .constraints([Constraint::Min(1), Constraint::Length(input_height)])
         .split(inner);
 
     let hist_area = parts[0];
+    state.history_area = Some(hist_area);
     let wrap_width = (hist_area.width as usize).saturating_sub(2);
     let avail_height = hist_area.height as usize;
 
@@ -1493,12 +1684,10 @@ fn render_chat(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         if wrapped.is_empty() {
             all_lines.push(Line::from(Span::styled(header, style)));
         } else {
-            // First line: [Label] first-text-line
             all_lines.push(Line::from(vec![
                 Span::styled(format!("{header} "), style),
                 Span::styled(wrapped[0].clone(), body_style),
             ]));
-            // Continuation lines indented by label+3 spaces
             let indent = " ".repeat(header.chars().count() + 1);
             for line in &wrapped[1..] {
                 all_lines.push(Line::from(Span::styled(
@@ -1507,21 +1696,108 @@ fn render_chat(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
                 )));
             }
         }
-        // Blank separator between messages
         all_lines.push(Line::from(""));
     }
 
-    // Scroll to bottom: show only lines that fit
-    let start = all_lines.len().saturating_sub(avail_height);
-    let visible: Vec<Line<'static>> = all_lines[start..].to_vec();
+    // Typing indicator when agent is working
+    if let Some((_, started)) = &state.pending_request {
+        let elapsed = started.elapsed();
+        let dot_count = (elapsed.as_millis() / 500) as usize % 3 + 1;
+        let dots = ".".repeat(dot_count);
+        let secs = elapsed.as_secs();
+        let indicator = format!("Agente pensando{}  ({}s)", dots, secs);
+        all_lines.push(Line::from(Span::styled(
+            indicator,
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )));
+        all_lines.push(Line::from(""));
+    }
+
+    // Scroll support: offset from bottom
+    let total = all_lines.len();
+    let scroll_offset = state.chat_scroll.min(total.saturating_sub(avail_height));
+    let end = total.saturating_sub(scroll_offset);
+    let start = end.saturating_sub(avail_height);
+    let mut visible: Vec<Line<'static>> = all_lines[start..end].to_vec();
+
+    // Show scroll indicator if not at bottom
+    if scroll_offset > 0 && !visible.is_empty() {
+        visible[0] = Line::from(Span::styled(
+            "  ↑ mensajes anteriores ↑",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        ));
+    }
+
     frame.render_widget(Paragraph::new(visible), hist_area);
 
-    // Input field
-    let input_block = Block::default().title("Mensaje").borders(Borders::ALL);
+    // Input field with cursor
+    let input_block = Block::default().title("Mensaje (Ctrl+J:nueva línea)").borders(Borders::ALL);
     let input_inner = input_block.inner(parts[1]);
+    state.input_area = Some(input_inner);
     frame.render_widget(input_block, parts[1]);
-    let input_para = Paragraph::new(state.chat_input.as_str());
+
+    // Render editor content with character-level wrapping (matches cursor calculation)
+    let input_w = input_inner.width as usize;
+    let mut input_lines: Vec<Line<'_>> = Vec::new();
+    for logical_line in state.chat_editor.lines() {
+        if logical_line.is_empty() || input_w == 0 {
+            input_lines.push(Line::from(""));
+        } else {
+            let chars: Vec<char> = logical_line.chars().collect();
+            for chunk in chars.chunks(input_w) {
+                input_lines.push(Line::from(chunk.iter().collect::<String>()));
+            }
+        }
+    }
+    let input_para = Paragraph::new(input_lines);
     frame.render_widget(input_para, input_inner);
+
+    // Set cursor position (only when Chat panel is focused and no modal)
+    if state.app.focused_panel == Panel::Chat && state.app.modal.is_none() {
+        let (cursor_x, cursor_y) = calculate_cursor_position(&state.chat_editor, input_inner);
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
+}
+
+/// Count the total visual lines the editor content would occupy given a width.
+fn count_visual_lines(editor: &TextEditor, width: usize) -> usize {
+    if width == 0 {
+        return editor.line_count();
+    }
+    editor.lines().iter().map(|line| {
+        let char_count = line.chars().count();
+        if char_count == 0 {
+            1
+        } else {
+            char_count.div_ceil(width)
+        }
+    }).sum()
+}
+
+/// Calculate the absolute (x, y) position of the cursor within the input area.
+fn calculate_cursor_position(editor: &TextEditor, area: Rect) -> (u16, u16) {
+    let width = area.width as usize;
+    if width == 0 {
+        return (area.x, area.y);
+    }
+
+    let mut visual_row: usize = 0;
+    for row in 0..editor.cursor_row() {
+        let line_chars = editor.lines()[row].chars().count();
+        visual_row += if line_chars == 0 { 1 } else { line_chars.div_ceil(width) };
+    }
+
+    // For the cursor's line, find which visual row/col the cursor falls on
+    let current_line = editor.current_line();
+    let cursor_char_offset = current_line[..editor.cursor_col()].chars().count();
+    let extra_rows = cursor_char_offset / width;
+    let col_in_row = cursor_char_offset % width;
+
+    visual_row += extra_rows;
+
+    let x = area.x + col_in_row as u16;
+    let y = area.y + (visual_row as u16).min(area.height.saturating_sub(1));
+    (x, y)
 }
 
 fn render_proximos(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
@@ -1661,15 +1937,31 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
     frame.render_widget(List::new(lines), inner);
 }
 
+fn spinner_state(pending: &Option<(Uuid, Instant)>) -> Option<(char, u64)> {
+    pending.as_ref().map(|(_, started)| {
+        let elapsed = started.elapsed();
+        let frame_idx = (elapsed.as_millis() / 250) as usize % SPINNER_FRAMES.len();
+        (SPINNER_FRAMES[frame_idx], elapsed.as_secs())
+    })
+}
+
 fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let hint = "Tab:siguiente  Shift+Tab:anterior  Ctrl+Q:salir";
-    let text = if state.app.status_bar.is_empty() {
-        hint.to_string()
+    let hint = "Tab:panel  Ctrl+Q:salir";
+
+    if let Some((spinner_char, secs)) = spinner_state(&state.pending_request) {
+        let working = format!("{} Pensando... ({}s)", spinner_char, secs);
+        let text = format!("{}  │  {}", working, hint);
+        let para = Paragraph::new(text).style(Style::default().fg(Color::Yellow));
+        frame.render_widget(para, area);
     } else {
-        format!("{}  │  {}", state.app.status_bar, hint)
-    };
-    let para = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(para, area);
+        let text = if state.app.status_bar.is_empty() {
+            hint.to_string()
+        } else {
+            format!("{}  │  {}", state.app.status_bar, hint)
+        };
+        let para = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(para, area);
+    }
 }
 
 // ---------------------------------------------------------------------------
