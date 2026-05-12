@@ -12,6 +12,12 @@ pub struct TextEditor {
     cursor_col: usize,
 }
 
+impl std::fmt::Display for TextEditor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.lines.join("\n"))
+    }
+}
+
 impl Default for TextEditor {
     fn default() -> Self {
         Self::new()
@@ -36,10 +42,6 @@ impl TextEditor {
         let cursor_row = lines.len() - 1;
         let cursor_col = lines[cursor_row].len();
         Self { lines, cursor_row, cursor_col }
-    }
-
-    pub fn to_string(&self) -> String {
-        self.lines.join("\n")
     }
 
     pub fn is_empty(&self) -> bool {

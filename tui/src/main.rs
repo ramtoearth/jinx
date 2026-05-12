@@ -1753,7 +1753,7 @@ fn count_visual_lines(editor: &TextEditor, width: usize) -> usize {
         if char_count == 0 {
             1
         } else {
-            (char_count + width - 1) / width
+            char_count.div_ceil(width)
         }
     }).sum()
 }
@@ -1768,7 +1768,7 @@ fn calculate_cursor_position(editor: &TextEditor, area: Rect) -> (u16, u16) {
     let mut visual_row: usize = 0;
     for row in 0..editor.cursor_row() {
         let line_chars = editor.lines()[row].chars().count();
-        visual_row += if line_chars == 0 { 1 } else { (line_chars + width - 1) / width };
+        visual_row += if line_chars == 0 { 1 } else { line_chars.div_ceil(width) };
     }
 
     // For the cursor's line, find which visual row/col the cursor falls on
