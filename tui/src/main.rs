@@ -393,6 +393,13 @@ fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.chat_editor.insert_newline();
         }
+        // Chat history scroll (Shift+arrows)
+        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            state.chat_scroll = state.chat_scroll.saturating_add(3);
+        }
+        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            state.chat_scroll = state.chat_scroll.saturating_sub(3);
+        }
         // Navigation
         KeyCode::Left => state.chat_editor.move_left(),
         KeyCode::Right => state.chat_editor.move_right(),
