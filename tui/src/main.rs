@@ -16,7 +16,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
+    event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -191,7 +191,7 @@ fn main() -> io::Result<()> {
     // -- Terminal setup ----------------------------------------------------
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -199,7 +199,7 @@ fn main() -> io::Result<()> {
 
     // -- Cleanup -----------------------------------------------------------
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture, DisableBracketedPaste)?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {
@@ -304,6 +304,9 @@ fn run_app(
                 }
                 Event::Mouse(mouse) => {
                     handle_mouse(&mut state, mouse);
+                }
+                Event::Paste(data) => {
+                    handle_paste(&mut state, data);
                 }
                 Event::Resize(cols, rows) => {
                     state.app = jinx::app::reduce(state.app, AppEvent::Resize(cols, rows));
@@ -503,6 +506,19 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
             }
         }
         _ => {}
+    }
+}
+
+fn handle_paste(state: &mut RuntimeState, data: String) {
+    if state.app.focused_panel != Panel::Chat || state.app.modal.is_some() {
+        return;
+    }
+    for c in data.chars() {
+        if c == '\n' || c == '\r' {
+            state.chat_editor.insert_newline();
+        } else {
+            state.chat_editor.insert_char(c);
+        }
     }
 }
 
