@@ -50,7 +50,15 @@ El primer arranque tarda ~30 segundos mientras `uv` instala las dependencias del
 
 ## Configuración del modelo
 
-Al ejecutar la app por primera vez se crea el archivo de configuración automáticamente:
+Puedes cambiar el modelo directamente desde la app con **Ctrl+P**:
+
+![Cambiar modelo](assets/demoConfigModelo.gif)
+
+Selecciona el proveedor (Local/Remote), escribe el nombre del modelo y presiona Enter. El agente se reinicia automáticamente con la nueva configuración.
+
+### Archivo de configuración
+
+La configuración se persiste automáticamente en:
 
 - **macOS:** `~/Library/Application Support/jinx/config.toml`
 - **Linux:** `~/.config/jinx/config.toml`
@@ -71,7 +79,7 @@ host  = "http://localhost:11434"
 model_id = ""
 ```
 
-Edita el archivo y reinicia la app para aplicar los cambios.
+También puedes editar el archivo manualmente y reiniciar la app.
 
 ## Configuración con Amazon Bedrock
 
