@@ -50,61 +50,29 @@ El primer arranque tarda ~30 segundos mientras `uv` instala las dependencias del
 
 ## Configuración del modelo
 
-Puedes cambiar el modelo directamente desde la app con **Ctrl+P**:
+Cambia el modelo directamente desde la app con **Ctrl+P**:
 
 ![Cambiar modelo](assets/demoConfigModelo.gif)
 
-Selecciona el proveedor (Local/Remote), escribe el nombre del modelo y presiona Enter. El agente se reinicia automáticamente con la nueva configuración.
+Selecciona el proveedor (Local/Remote), escribe el nombre del modelo y presiona Enter. El agente se reinicia automáticamente.
 
-### Archivo de configuración
+### Ollama (local)
 
-La configuración se persiste automáticamente en:
+Modelos con soporte de tool calling: `llama3.1`, `llama3.2`, `qwen3`.
 
-- **macOS:** `~/Library/Application Support/jinx/config.toml`
-- **Linux:** `~/.config/jinx/config.toml`
-- **Windows:** `%APPDATA%\jinx\config.toml`
+### Amazon Bedrock (remote)
 
-```toml
-# Proveedor activo: "local" (Ollama, sin envío de datos) o "remote" (Amazon Bedrock)
-provider = "local"
-
-[local]
-# Modelos con soporte de tool calling: llama3.1, llama3.2, qwen3
-model = "llama3.2:3b"
-host  = "http://localhost:11434"
-
-[remote]
-# ID del modelo en Amazon Bedrock
-# Ejemplo: "anthropic.claude-3-5-sonnet-20241022-v2:0"
-model_id = ""
-```
-
-También puedes editar el archivo manualmente y reiniciar la app.
-
-## Configuración con Amazon Bedrock
-
-Para usar modelos en AWS en lugar de Ollama:
-
-**1. Autentícate con AWS CLI v2** (versión 2.32.0 o superior):
+1. Autentícate con AWS CLI v2 (versión 2.32.0+):
 
 ```bash
 aws login
 ```
 
-Esto abre el navegador para iniciar sesión con tus credenciales de consola AWS. Las credenciales temporales se guardan automáticamente y se renuevan durante hasta 12 horas. Consulta la [documentación oficial](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html) para más detalles.
+Esto abre el navegador para iniciar sesión. Las credenciales se renuevan durante hasta 12 horas. Ver [documentación oficial](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html).
 
-**2. Activa el modelo en Bedrock** (Amazon Bedrock → Model access) en la región que vayas a usar.
+2. Activa el modelo en Bedrock (Amazon Bedrock → Model access) en tu región.
 
-**3. Edita el archivo de configuración** de jinx:
-
-```toml
-provider = "remote"
-
-[remote]
-model_id = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-```
-
-Reinicia jinx para aplicar los cambios.
+3. Abre **Ctrl+P** en jinx, selecciona Remote y escribe el model ID (ej: `anthropic.claude-3-5-sonnet-20241022-v2:0`).
 
 ## Compilar desde el código fuente
 
