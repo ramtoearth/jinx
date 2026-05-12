@@ -16,7 +16,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use crossterm::{
-    event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -191,7 +191,7 @@ fn main() -> io::Result<()> {
     // -- Terminal setup ----------------------------------------------------
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -199,7 +199,7 @@ fn main() -> io::Result<()> {
 
     // -- Cleanup -----------------------------------------------------------
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture, DisableBracketedPaste)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableBracketedPaste)?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {
@@ -1915,7 +1915,7 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
 }
 
 fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let hint = "Tab:panel  Ctrl+Q:salir  Shift+arrastrar:copiar texto";
+    let hint = "Tab:panel  Ctrl+Q:salir";
     let text = if state.app.status_bar.is_empty() {
         hint.to_string()
     } else {
