@@ -510,7 +510,11 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
 }
 
 fn handle_paste(state: &mut RuntimeState, data: String) {
-    if state.app.focused_panel != Panel::Chat || state.app.modal.is_some() {
+    if state.app.modal.is_some() {
+        handle_modal_paste(state, &data);
+        return;
+    }
+    if state.app.focused_panel != Panel::Chat {
         return;
     }
     for c in data.chars() {
@@ -519,6 +523,35 @@ fn handle_paste(state: &mut RuntimeState, data: String) {
         } else {
             state.chat_editor.insert_char(c);
         }
+    }
+}
+
+fn handle_modal_paste(state: &mut RuntimeState, data: &str) {
+    let clean: String = data.chars().filter(|&c| c != '\n' && c != '\r').collect();
+    match &state.app.modal {
+        Some(Modal::NewTask) | Some(Modal::EditTask { .. }) => match state.task_form.field {
+            0 => state.task_form.title.push_str(&clean),
+            2 => state.task_form.deadline.push_str(&clean),
+            _ => {}
+        },
+        Some(Modal::NewEvent) | Some(Modal::EditEvent { .. }) => match state.event_form.field {
+            0 => state.event_form.title.push_str(&clean),
+            1 => state.event_form.start_date.push_str(&clean),
+            2 => state.event_form.start_time.push_str(&clean),
+            3 => state.event_form.duration.push_str(&clean),
+            _ => {}
+        },
+        Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => match state.group_form.field {
+            0 => state.group_form.name.push_str(&clean),
+            1 => state.group_form.color_custom.push_str(&clean),
+            _ => {}
+        },
+        Some(Modal::Settings) => match state.settings_form.field {
+            1 => state.settings_form.model_input.push_str(&clean),
+            2 => state.settings_form.host_input.push_str(&clean),
+            _ => {}
+        },
+        _ => {}
     }
 }
 
@@ -1882,7 +1915,7 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
 }
 
 fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let hint = "Tab:siguiente  Shift+Tab:anterior  Ctrl+Q:salir";
+    let hint = "Tab:panel  Ctrl+Q:salir  Shift+arrastrar:copiar texto";
     let text = if state.app.status_bar.is_empty() {
         hint.to_string()
     } else {
