@@ -1664,9 +1664,20 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
     state.input_area = Some(input_inner);
     frame.render_widget(input_block, parts[1]);
 
-    // Render editor content with word-wrap
-    let editor_text = state.chat_editor.to_string();
-    let input_para = Paragraph::new(editor_text.as_str()).wrap(ratatui::widgets::Wrap { trim: false });
+    // Render editor content with character-level wrapping (matches cursor calculation)
+    let input_w = input_inner.width as usize;
+    let mut input_lines: Vec<Line<'_>> = Vec::new();
+    for logical_line in state.chat_editor.lines() {
+        if logical_line.is_empty() || input_w == 0 {
+            input_lines.push(Line::from(""));
+        } else {
+            let chars: Vec<char> = logical_line.chars().collect();
+            for chunk in chars.chunks(input_w) {
+                input_lines.push(Line::from(chunk.iter().collect::<String>()));
+            }
+        }
+    }
+    let input_para = Paragraph::new(input_lines);
     frame.render_widget(input_para, input_inner);
 
     // Set cursor position (only when Chat panel is focused and no modal)
