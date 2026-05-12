@@ -118,16 +118,16 @@ Este plan implementa las tres mejoras de UX del Panel_Chat: cursor visible con n
   - [x] 8.8 Implementar scroll en Panel_Proximos: ScrollUp decrementa `group_cursor`, ScrollDown lo incrementa (con clamping)
     - _Requisitos: 6.7_
 
-- [ ] 9. Tests de integración y pulido
-  - [ ] 9.1 Test: enviar mensaje multilínea (con Ctrl+J) y verificar que llega completo al agente con los \n preservados
+- [x] 9. Tests de integración y pulido
+  - [x] 9.1 Test: enviar mensaje multilínea (con Ctrl+J) y verificar que llega completo al agente con los \n preservados
     - _Requisitos: 2.8, 7.1_
-  - [ ] 9.2 Test: verificar que PgUp/PgDn adjustan el offset correctamente y que el clamping funciona en los extremos
+  - [x] 9.2 Test: verificar que PgUp/PgDn adjustan el offset correctamente y que el clamping funciona en los extremos
     - _Requisitos: 4.1, 4.2_
-  - [ ] 9.3 Test: verificar que nuevo mensaje reseta el scroll a 0
+  - [x] 9.3 Test: verificar que nuevo mensaje reseta el scroll a 0
     - _Requisitos: 4.3_
   - [ ] 9.4 Verificación manual: compilar y probar en terminal real que el cursor es visible, los atajos funcionan, el wrapping es correcto, y el mouse scroll funciona en todos los paneles
     - _Requisitos: 1.1, 3.1, 4.1, 5.1, 5.2, 6.1–6.7_
-  - [ ] 9.5 Verificar que Tab/Shift+Tab, Ctrl+Q, Ctrl+P siguen funcionando sin conflicto
+  - [x] 9.5 Verificar que Tab/Shift+Tab, Ctrl+Q, Ctrl+P siguen funcionando sin conflicto
     - _Requisitos: 7.3, 7.4_
   - [ ] 9.6 Verificar en macOS que Option+B y Option+F funcionan cuando el emulador tiene "Option as Meta" habilitado
     - _Requisitos: 5.1, 5.2_
