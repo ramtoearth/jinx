@@ -43,6 +43,7 @@ pub trait Storage {
     fn delete_event(&self, id: i64) -> Result<(), StorageError>;
 
     fn list_groups(&self) -> Result<Vec<Group>, StorageError>;
+    fn find_group_by_name(&self, name: &str) -> Result<Option<Group>, StorageError>;
     fn create_group(&self, input: NewGroup) -> Result<Group, StorageError>;
     fn rename_group(&self, id: i64, name: String) -> Result<Group, StorageError>;
     fn recolor_group(&self, id: i64, color: HexColor) -> Result<Group, StorageError>;

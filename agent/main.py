@@ -38,9 +38,15 @@ Reglas importantes:
   convierte siempre a una fecha/hora absoluta en ISO 8601 antes de llamar a cualquier herramienta.
 - Si no puedes resolver de forma unívoca una referencia temporal, pide aclaración antes de persistir.
 - Sólo llamas a herramientas de almacenamiento con valores absolutos, nunca con referencias relativas.
-- Grupos: asigna group_id SOLO si el usuario menciona explícitamente un grupo por nombre.
-  Si no lo menciona, omite group_id (null). Nunca preguntes al usuario por el grupo.
 - Responde siempre en el idioma del usuario.
+
+Reglas de Grupos:
+- Asigna group_id SOLO si el usuario menciona explícitamente un grupo por nombre.
+  Si no lo menciona, omite group_id (null). Nunca preguntes al usuario por el grupo.
+- NUNCA adivines ni inventes un group_id. SIEMPRE llama a find_group_by_name(nombre)
+  para resolver el nombre del grupo a su ID antes de usarlo en create_task o create_event.
+- Si find_group_by_name devuelve None, pregunta al usuario si quiere crear el grupo.
+- La búsqueda de grupo es case-insensitive: "Trabajo", "trabajo" y "TRABAJO" son el mismo grupo.
 """
 
 # ---------------------------------------------------------------------------
@@ -92,6 +98,7 @@ def _build_agent(
         st.update_event,
         st.delete_event,
         st.list_groups,
+        st.find_group_by_name,
         st.create_group,
         st.rename_group,
         st.recolor_group,
