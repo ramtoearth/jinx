@@ -109,6 +109,8 @@ struct ChatMsg {
 // Modal form state
 // ---------------------------------------------------------------------------
 
+const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 const COLOR_PRESETS: [&str; 16] = [
     "#e74c3c", "#e67e22", "#f1c40f", "#2ecc71",
     "#1abc9c", "#3498db", "#9b59b6", "#e91e63",
@@ -1697,6 +1699,20 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
         all_lines.push(Line::from(""));
     }
 
+    // Typing indicator when agent is working
+    if let Some((_, started)) = &state.pending_request {
+        let elapsed = started.elapsed();
+        let dot_count = (elapsed.as_millis() / 500) as usize % 3 + 1;
+        let dots = ".".repeat(dot_count);
+        let secs = elapsed.as_secs();
+        let indicator = format!("Agente pensando{}  ({}s)", dots, secs);
+        all_lines.push(Line::from(Span::styled(
+            indicator,
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )));
+        all_lines.push(Line::from(""));
+    }
+
     // Scroll support: offset from bottom
     let total = all_lines.len();
     let scroll_offset = state.chat_scroll.min(total.saturating_sub(avail_height));
@@ -1921,15 +1937,31 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
     frame.render_widget(List::new(lines), inner);
 }
 
+fn spinner_state(pending: &Option<(Uuid, Instant)>) -> Option<(char, u64)> {
+    pending.as_ref().map(|(_, started)| {
+        let elapsed = started.elapsed();
+        let frame_idx = (elapsed.as_millis() / 250) as usize % SPINNER_FRAMES.len();
+        (SPINNER_FRAMES[frame_idx], elapsed.as_secs())
+    })
+}
+
 fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let hint = "Tab:panel  Ctrl+Q:salir";
-    let text = if state.app.status_bar.is_empty() {
-        hint.to_string()
+
+    if let Some((spinner_char, secs)) = spinner_state(&state.pending_request) {
+        let working = format!("{} Pensando... ({}s)", spinner_char, secs);
+        let text = format!("{}  │  {}", working, hint);
+        let para = Paragraph::new(text).style(Style::default().fg(Color::Yellow));
+        frame.render_widget(para, area);
     } else {
-        format!("{}  │  {}", state.app.status_bar, hint)
-    };
-    let para = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(para, area);
+        let text = if state.app.status_bar.is_empty() {
+            hint.to_string()
+        } else {
+            format!("{}  │  {}", state.app.status_bar, hint)
+        };
+        let para = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(para, area);
+    }
 }
 
 // ---------------------------------------------------------------------------
