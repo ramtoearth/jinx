@@ -121,7 +121,7 @@ pub fn add_24h(date: &str, time: &str) -> (String, String) {
     (format!("{ny:04}-{nmo:02}-{nd:02}"), time.to_string())
 }
 
-fn days_in_month(year: u32, month: u32) -> u32 {
+pub fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,

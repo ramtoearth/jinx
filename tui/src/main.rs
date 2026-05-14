@@ -119,28 +119,56 @@ const COLOR_PRESETS: [&str; 16] = [
     "#4caf50", "#2196f3", "#9c27b0", "#f44336",
 ];
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct TaskFormState {
     title: String,
     priority_idx: usize,  // 0=alta 1=media 2=baja
-    deadline: String,     // YYYY-MM-DD or empty
+    deadline: DateTimeInput,
     group_idx: usize,     // 0=ninguno, 1..=N = groups_cache[idx-1]
     status_idx: usize,    // 0=pendiente 1=completada 2=cancelada (edit only)
-    field: usize,         // active field
+    field: usize,         // active field: 0=title 1=priority 2=deadline 3=group 4=status(edit)
     edit_id: Option<i64>,
     error: Option<String>,
 }
 
-#[derive(Default, Clone)]
+impl Default for TaskFormState {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            priority_idx: 1,
+            deadline: DateTimeInput::date_only_disabled(),
+            group_idx: 0,
+            status_idx: 0,
+            field: 0,
+            edit_id: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct EventFormState {
     title: String,
-    start_date: String,   // YYYY-MM-DD
-    start_time: String,   // HH:MM
+    datetime: DateTimeInput,
     duration: String,     // minutes or empty
     group_idx: usize,
-    field: usize,
+    field: usize,         // 0=title 1=datetime 2=duration 3=group
     edit_id: Option<i64>,
     error: Option<String>,
+}
+
+impl Default for EventFormState {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            datetime: DateTimeInput::date_time_now(),
+            duration: String::new(),
+            group_idx: 0,
+            field: 0,
+            edit_id: None,
+            error: None,
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -177,6 +205,320 @@ impl GroupFormState {
             COLOR_PRESETS[self.color_idx % COLOR_PRESETS.len()]
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Date/time segmented input widget
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DateInputResult {
+    Consumed,
+    NextField,
+}
+
+#[derive(Clone)]
+struct DateTimeInput {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    segment: usize,
+    has_time: bool,
+    enabled: bool,
+    typing_buf: String,
+}
+
+impl DateTimeInput {
+    fn date_only_disabled() -> Self {
+        let now = chrono::Utc::now();
+        Self {
+            year: now.format("%Y").to_string().parse().unwrap_or(2026),
+            month: now.format("%m").to_string().parse().unwrap_or(1),
+            day: now.format("%d").to_string().parse().unwrap_or(1),
+            hour: 0,
+            minute: 0,
+            segment: 0,
+            has_time: false,
+            enabled: false,
+            typing_buf: String::new(),
+        }
+    }
+
+    fn date_time_now() -> Self {
+        let now = chrono::Utc::now();
+        Self {
+            year: now.format("%Y").to_string().parse().unwrap_or(2026),
+            month: now.format("%m").to_string().parse().unwrap_or(1),
+            day: now.format("%d").to_string().parse().unwrap_or(1),
+            hour: now.format("%H").to_string().parse().unwrap_or(0),
+            minute: now.format("%M").to_string().parse().unwrap_or(0),
+            segment: 0,
+            has_time: true,
+            enabled: true,
+            typing_buf: String::new(),
+        }
+    }
+
+    fn from_iso(s: &str, has_time: bool) -> Self {
+        let date_part = if let Some(pos) = s.find('T') { &s[..pos] } else { s };
+        let parts: Vec<&str> = date_part.split('-').collect();
+        let year = parts.first().and_then(|p| p.parse().ok()).unwrap_or(2026);
+        let month = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(1);
+        let day = parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(1);
+
+        let (hour, minute) = if has_time {
+            if let Some(pos) = s.find('T') {
+                let time_part = &s[pos + 1..];
+                let hm: Vec<&str> = time_part.split(':').collect();
+                let h = hm.first().and_then(|p| p.parse().ok()).unwrap_or(0);
+                let m = hm.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+                (h, m)
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+
+        let mut input = Self {
+            year, month, day, hour, minute,
+            segment: 0, has_time, enabled: true, typing_buf: String::new(),
+        };
+        input.clamp();
+        input
+    }
+
+    fn from_date_time_strings(date: &str, time: &str) -> Self {
+        let parts: Vec<&str> = date.split('-').collect();
+        let year = parts.first().and_then(|p| p.parse().ok()).unwrap_or(2026);
+        let month = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(1);
+        let day = parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(1);
+        let hm: Vec<&str> = time.split(':').collect();
+        let hour = hm.first().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let minute = hm.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+
+        let mut input = Self {
+            year, month, day, hour, minute,
+            segment: 0, has_time: true, enabled: true, typing_buf: String::new(),
+        };
+        input.clamp();
+        input
+    }
+
+    fn max_day(&self) -> u8 {
+        jinx::proximos::days_in_month(self.year as u32, self.month as u32) as u8
+    }
+
+    fn clamp(&mut self) {
+        self.year = self.year.clamp(2020, 2099);
+        self.month = self.month.clamp(1, 12);
+        self.day = self.day.clamp(1, self.max_day());
+        self.hour = self.hour.min(23);
+        self.minute = self.minute.min(59);
+    }
+
+    fn n_segments(&self) -> usize {
+        if self.has_time { 5 } else { 3 }
+    }
+
+    fn to_date_string(&self) -> Option<String> {
+        if !self.enabled { return None; }
+        Some(format!("{:04}-{:02}-{:02}", self.year, self.month, self.day))
+    }
+
+    fn to_time_string(&self) -> String {
+        format!("{:02}:{:02}", self.hour, self.minute)
+    }
+
+    fn to_iso_string(&self) -> Option<String> {
+        if !self.enabled { return None; }
+        Some(format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:00+00:00",
+            self.year, self.month, self.day, self.hour, self.minute
+        ))
+    }
+
+    fn commit_typing_buf(&mut self) {
+        if self.typing_buf.is_empty() { return; }
+        let val: u16 = self.typing_buf.parse().unwrap_or(0);
+        match self.segment {
+            0 => self.year = (val).clamp(2020, 2099),
+            1 => self.month = (val as u8).clamp(1, 12),
+            2 => {
+                self.day = (val as u8).clamp(1, self.max_day());
+            }
+            3 => self.hour = (val as u8).min(23),
+            4 => self.minute = (val as u8).min(59),
+            _ => {}
+        }
+        self.typing_buf.clear();
+        self.clamp();
+    }
+
+    fn segment_max_digits(&self) -> usize {
+        if self.segment == 0 { 4 } else { 2 }
+    }
+
+    fn handle_key(&mut self, code: KeyCode) -> DateInputResult {
+        if !self.enabled {
+            match code {
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    self.enabled = true;
+                    return DateInputResult::Consumed;
+                }
+                KeyCode::Tab => return DateInputResult::NextField,
+                _ => return DateInputResult::Consumed,
+            }
+        }
+
+        match code {
+            KeyCode::Left => {
+                self.commit_typing_buf();
+                if self.segment > 0 {
+                    self.segment -= 1;
+                }
+                DateInputResult::Consumed
+            }
+            KeyCode::Right => {
+                self.commit_typing_buf();
+                if self.segment + 1 < self.n_segments() {
+                    self.segment += 1;
+                }
+                DateInputResult::Consumed
+            }
+            KeyCode::Up => {
+                self.commit_typing_buf();
+                match self.segment {
+                    0 if self.year < 2099 => { self.year += 1; }
+                    1 => { self.month = if self.month >= 12 { 1 } else { self.month + 1 }; }
+                    2 => {
+                        let max = self.max_day();
+                        self.day = if self.day >= max { 1 } else { self.day + 1 };
+                    }
+                    3 => { self.hour = if self.hour >= 23 { 0 } else { self.hour + 1 }; }
+                    4 => { self.minute = if self.minute >= 59 { 0 } else { self.minute + 1 }; }
+                    _ => {}
+                }
+                self.clamp();
+                DateInputResult::Consumed
+            }
+            KeyCode::Down => {
+                self.commit_typing_buf();
+                match self.segment {
+                    0 if self.year > 2020 => { self.year -= 1; }
+                    1 => { self.month = if self.month <= 1 { 12 } else { self.month - 1 }; }
+                    2 => {
+                        let max = self.max_day();
+                        self.day = if self.day <= 1 { max } else { self.day - 1 };
+                    }
+                    3 => { self.hour = if self.hour == 0 { 23 } else { self.hour - 1 }; }
+                    4 => { self.minute = if self.minute == 0 { 59 } else { self.minute - 1 }; }
+                    _ => {}
+                }
+                self.clamp();
+                DateInputResult::Consumed
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                self.typing_buf.push(c);
+                if self.typing_buf.len() >= self.segment_max_digits() {
+                    self.commit_typing_buf();
+                    if self.segment + 1 < self.n_segments() {
+                        self.segment += 1;
+                    }
+                }
+                DateInputResult::Consumed
+            }
+            KeyCode::Backspace => {
+                if self.typing_buf.pop().is_none() && self.segment > 0 {
+                    self.segment -= 1;
+                }
+                DateInputResult::Consumed
+            }
+            KeyCode::Delete => {
+                if !self.has_time {
+                    self.enabled = false;
+                }
+                DateInputResult::Consumed
+            }
+            KeyCode::Tab => {
+                self.commit_typing_buf();
+                DateInputResult::NextField
+            }
+            _ => DateInputResult::Consumed,
+        }
+    }
+}
+
+fn date_input_line<'a>(label: &'a str, input: &DateTimeInput, field_active: bool) -> Line<'a> {
+    let label_style = if field_active {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let mut spans: Vec<Span<'static>> = vec![
+        Span::styled(format!("  {:16}", label), label_style),
+    ];
+
+    if !input.enabled {
+        let hint = if field_active { "(Enter para activar, Tab siguiente)" } else { "(sin fecha)" };
+        spans.push(Span::styled(hint.to_string(), Style::default().fg(Color::DarkGray)));
+        return Line::from(spans);
+    }
+
+    let segments: Vec<String> = if input.has_time {
+        vec![
+            format!("{:04}", input.year),
+            format!("{:02}", input.month),
+            format!("{:02}", input.day),
+            format!("{:02}", input.hour),
+            format!("{:02}", input.minute),
+        ]
+    } else {
+        vec![
+            format!("{:04}", input.year),
+            format!("{:02}", input.month),
+            format!("{:02}", input.day),
+        ]
+    };
+
+    let separators: Vec<&str> = if input.has_time {
+        vec!["-", "-", "  ", ":"]
+    } else {
+        vec!["-", "-"]
+    };
+
+    for (i, seg) in segments.iter().enumerate() {
+        let display = if field_active && i == input.segment && !input.typing_buf.is_empty() {
+            let pad = if i == 0 { 4 } else { 2 };
+            format!("{:_<pad$}", input.typing_buf, pad = pad)
+        } else {
+            seg.clone()
+        };
+
+        let style = if field_active && i == input.segment {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else if field_active {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(display, style));
+        if i < separators.len() {
+            spans.push(Span::raw(separators[i].to_string()));
+        }
+    }
+
+    if field_active {
+        spans.push(Span::styled(
+            "  ←/→:seg ↑↓:±1 Del:quitar".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    Line::from(spans)
 }
 
 // ---------------------------------------------------------------------------
@@ -601,16 +943,11 @@ fn handle_paste(state: &mut RuntimeState, data: String) {
 fn handle_modal_paste(state: &mut RuntimeState, data: &str) {
     let clean: String = data.chars().filter(|&c| c != '\n' && c != '\r').collect();
     match &state.app.modal {
-        Some(Modal::NewTask) | Some(Modal::EditTask { .. }) => match state.task_form.field {
-            0 => state.task_form.title.push_str(&clean),
-            2 => state.task_form.deadline.push_str(&clean),
-            _ => {}
-        },
+        Some(Modal::NewTask) | Some(Modal::EditTask { .. })
+            if state.task_form.field == 0 => { state.task_form.title.push_str(&clean); }
         Some(Modal::NewEvent) | Some(Modal::EditEvent { .. }) => match state.event_form.field {
             0 => state.event_form.title.push_str(&clean),
-            1 => state.event_form.start_date.push_str(&clean),
-            2 => state.event_form.start_time.push_str(&clean),
-            3 => state.event_form.duration.push_str(&clean),
+            2 => state.event_form.duration.push_str(&clean),
             _ => {}
         },
         Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => match state.group_form.field {
@@ -822,14 +1159,19 @@ fn open_edit_task_modal(state: &mut RuntimeState, id: i64) {
         let group_idx = t.group_id
             .and_then(|gid| state.groups_cache.iter().position(|g| g.id == gid).map(|p| p + 1))
             .unwrap_or(0);
+        let deadline = match &t.deadline {
+            Some(s) => DateTimeInput::from_iso(s, false),
+            None => DateTimeInput::date_only_disabled(),
+        };
         state.task_form = TaskFormState {
             title: t.title.clone(),
             priority_idx,
-            deadline: t.deadline.clone().unwrap_or_default(),
+            deadline,
             group_idx,
             status_idx,
+            field: 0,
             edit_id: Some(id),
-            ..Default::default()
+            error: None,
         };
         state.app.modal = Some(Modal::EditTask { id });
     }
@@ -850,12 +1192,12 @@ fn open_edit_event_modal(state: &mut RuntimeState, id: i64) {
             .unwrap_or(0);
         state.event_form = EventFormState {
             title: ev.title.clone(),
-            start_date: ev.start_date.clone(),
-            start_time: ev.start_time.clone(),
+            datetime: DateTimeInput::from_date_time_strings(&ev.start_date, &ev.start_time),
             duration: ev.duration_minutes.map(|d| d.to_string()).unwrap_or_default(),
             group_idx,
+            field: 0,
             edit_id: Some(id),
-            ..Default::default()
+            error: None,
         };
         state.app.modal = Some(Modal::EditEvent { id });
     }
@@ -1126,6 +1468,17 @@ fn handle_delete_key<F: FnOnce(&mut RuntimeState)>(
 fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let is_edit = state.task_form.edit_id.is_some();
     let n_fields = if is_edit { 5 } else { 4 };
+
+    if state.task_form.field == 2 {
+        match state.task_form.deadline.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => {
+                state.task_form.field = (state.task_form.field + 1) % n_fields;
+                return;
+            }
+        }
+    }
+
     match key.code {
         KeyCode::Tab => state.task_form.field = (state.task_form.field + 1) % n_fields,
         KeyCode::BackTab => state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields,
@@ -1141,16 +1494,8 @@ fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEven
             4 => state.task_form.status_idx = (state.task_form.status_idx + 1) % 3,
             _ => {}
         },
-        KeyCode::Char(c) => match state.task_form.field {
-            0 => state.task_form.title.push(c),
-            2 => state.task_form.deadline.push(c),
-            _ => {}
-        },
-        KeyCode::Backspace => match state.task_form.field {
-            0 => { state.task_form.title.pop(); }
-            2 => { state.task_form.deadline.pop(); }
-            _ => {}
-        },
+        KeyCode::Char(c) if state.task_form.field == 0 => { state.task_form.title.push(c); }
+        KeyCode::Backspace if state.task_form.field == 0 => { state.task_form.title.pop(); }
         KeyCode::Enter => save_task(state),
         KeyCode::Esc => { state.app.modal = None; state.task_form.error = None; }
         _ => {}
@@ -1158,30 +1503,37 @@ fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEven
 }
 
 fn handle_event_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
-    let n_fields = 5;
+    let n_fields = 4; // title, datetime, duration, group
+
+    if state.event_form.field == 1 {
+        match state.event_form.datetime.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => {
+                state.event_form.field = (state.event_form.field + 1) % n_fields;
+                return;
+            }
+        }
+    }
+
     match key.code {
         KeyCode::Tab => state.event_form.field = (state.event_form.field + 1) % n_fields,
         KeyCode::BackTab => state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields,
-        KeyCode::Left if state.event_form.field == 4 => {
+        KeyCode::Left if state.event_form.field == 3 => {
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + n - 1) % n;
         }
-        KeyCode::Right if state.event_form.field == 4 => {
+        KeyCode::Right if state.event_form.field == 3 => {
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + 1) % n;
         }
         KeyCode::Char(c) => match state.event_form.field {
             0 => state.event_form.title.push(c),
-            1 => state.event_form.start_date.push(c),
-            2 => state.event_form.start_time.push(c),
-            3 => state.event_form.duration.push(c),
+            2 => state.event_form.duration.push(c),
             _ => {}
         },
         KeyCode::Backspace => match state.event_form.field {
             0 => { state.event_form.title.pop(); }
-            1 => { state.event_form.start_date.pop(); }
-            2 => { state.event_form.start_time.pop(); }
-            3 => { state.event_form.duration.pop(); }
+            2 => { state.event_form.duration.pop(); }
             _ => {}
         },
         KeyCode::Enter => save_event(state),
@@ -1229,7 +1581,7 @@ fn save_task(state: &mut RuntimeState) {
     let priorities = [Priority::Alta, Priority::Media, Priority::Baja];
     let statuses = [TaskStatus::Pendiente, TaskStatus::Completada, TaskStatus::Cancelada];
     let priority = priorities[form.priority_idx];
-    let deadline = if form.deadline.trim().is_empty() { None } else { Some(form.deadline.trim().to_string()) };
+    let deadline = form.deadline.to_iso_string();
     let group_id = if form.group_idx == 0 { None } else {
         state.groups_cache.get(form.group_idx - 1).map(|g| g.id)
     };
@@ -1267,12 +1619,10 @@ fn save_event(state: &mut RuntimeState) {
         state.event_form.error = Some("El título no puede estar vacío.".to_string());
         return;
     }
-    if form.start_date.trim().is_empty() {
+    let start_date = form.datetime.to_date_string().unwrap_or_default();
+    let start_time = form.datetime.to_time_string();
+    if start_date.is_empty() {
         state.event_form.error = Some("La fecha de inicio es obligatoria.".to_string());
-        return;
-    }
-    if form.start_time.trim().is_empty() {
-        state.event_form.error = Some("La hora de inicio es obligatoria.".to_string());
         return;
     }
     let duration_minutes: Option<u32> = if form.duration.trim().is_empty() {
@@ -1290,16 +1640,16 @@ fn save_event(state: &mut RuntimeState) {
     let result: Result<_, _> = if let Some(id) = form.edit_id {
         state.storage.update_event(id, EventPatch {
             title: Some(form.title.trim().to_string()),
-            start_date: Some(form.start_date.trim().to_string()),
-            start_time: Some(form.start_time.trim().to_string()),
+            start_date: Some(start_date.clone()),
+            start_time: Some(start_time.clone()),
             duration_minutes: Some(duration_minutes),
             group_id: Some(group_id),
         }).map(|_| ())
     } else {
         state.storage.create_event(NewEvent {
             title: form.title.trim().to_string(),
-            start_date: form.start_date.trim().to_string(),
-            start_time: form.start_time.trim().to_string(),
+            start_date,
+            start_time,
             duration_minutes,
             group_id,
         }).map(|_| ())
@@ -1732,11 +2082,7 @@ fn render_task_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
     lines.push(form_line("Título", form.title.clone(), form.field == 0));
     lines.push(form_line("Prioridad", format!("← {} →", priorities[form.priority_idx]), form.field == 1));
-    lines.push(form_line(
-        "Fecha límite",
-        if form.deadline.is_empty() { "(YYYY-MM-DD o vacío)".into() } else { form.deadline.clone() },
-        form.field == 2,
-    ));
+    lines.push(date_input_line("Fecha límite", &form.deadline, form.field == 2));
     lines.push(form_line(
         "Grupo",
         format!("← {} →", groups.get(form.group_idx).map(String::as_str).unwrap_or("(ninguno)")),
@@ -1771,13 +2117,12 @@ fn render_event_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
     lines.push(form_line("Título", form.title.clone(), form.field == 0));
-    lines.push(form_line("Fecha inicio", if form.start_date.is_empty() { "(YYYY-MM-DD)".into() } else { form.start_date.clone() }, form.field == 1));
-    lines.push(form_line("Hora inicio", if form.start_time.is_empty() { "(HH:MM)".into() } else { form.start_time.clone() }, form.field == 2));
-    lines.push(form_line("Duración (min)", if form.duration.is_empty() { "(vacío = sin límite)".into() } else { form.duration.clone() }, form.field == 3));
+    lines.push(date_input_line("Fecha/Hora", &form.datetime, form.field == 1));
+    lines.push(form_line("Duración (min)", if form.duration.is_empty() { "(vacío = sin límite)".into() } else { form.duration.clone() }, form.field == 2));
     lines.push(form_line(
         "Grupo",
         format!("← {} →", groups.get(form.group_idx).map(String::as_str).unwrap_or("(ninguno)")),
-        form.field == 4,
+        form.field == 3,
     ));
     lines.push(Line::from(""));
     if let Some(ref err) = form.error {
