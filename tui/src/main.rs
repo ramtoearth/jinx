@@ -274,6 +274,8 @@ struct RuntimeState {
     chat_scroll: usize, // lines from bottom; 0 = pinned to bottom
     task_cursor: usize,
     calendar_cursor: usize,
+    calendar_scroll: usize,
+    calendar_scroll_initialized: bool,
     group_cursor: usize,
     tareas_section: TareasSection,
     tareas_filter: ActiveTaskFilter,
@@ -313,6 +315,8 @@ fn run_app(
         chat_scroll: 0,
         task_cursor: 0,
         calendar_cursor: 0,
+        calendar_scroll: 0,
+        calendar_scroll_initialized: false,
         group_cursor: 0,
         tareas_section: TareasSection::default(),
         tareas_filter: ActiveTaskFilter::default(),
@@ -2225,7 +2229,7 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     frame.render_widget(List::new(group_items), sections[1]);
 }
 
-fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
     let block = panel_block("Calendario");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -2235,20 +2239,35 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
     let view = jinx::calendario::calendar_layout(&tasks, &events);
     let flat = flat_entries(&view);
 
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let groups = state.storage.list_groups().unwrap_or_default();
     let mut lines: Vec<ListItem> = vec![];
     let mut entry_idx = 0usize;
+    let mut today_line_idx: Option<usize> = None;
+    let mut cursor_line_idx: usize = 0;
 
     for item in &flat {
         match item {
             FlatCalEntry::DateHeader(date) => {
-                lines.push(
-                    ListItem::new(date.as_str())
-                        .style(Style::default().add_modifier(Modifier::BOLD)),
-                );
+                if date == &today {
+                    today_line_idx = Some(lines.len());
+                    let label = format!("* {} (hoy)", date);
+                    lines.push(
+                        ListItem::new(label)
+                            .style(Style::default().fg(Color::Rgb(255, 20, 147)).add_modifier(Modifier::BOLD)),
+                    );
+                } else {
+                    lines.push(
+                        ListItem::new(date.as_str())
+                            .style(Style::default().add_modifier(Modifier::BOLD)),
+                    );
+                }
             }
             FlatCalEntry::Entry(entry) => {
                 let selected = entry_idx == state.calendar_cursor;
+                if selected {
+                    cursor_line_idx = lines.len();
+                }
                 let cursor = if selected { "▶" } else { " " };
 
                 let entry_style = if selected {
@@ -2282,7 +2301,26 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
         Style::default().fg(Color::DarkGray),
     ))));
 
-    frame.render_widget(List::new(lines), inner);
+    let visible_height = inner.height as usize;
+
+    if !state.calendar_scroll_initialized && today_line_idx.is_some() {
+        state.calendar_scroll = today_line_idx.unwrap_or(0);
+        state.calendar_scroll_initialized = true;
+    }
+
+    if !lines.is_empty() && visible_height > 0 {
+        if cursor_line_idx < state.calendar_scroll {
+            state.calendar_scroll = cursor_line_idx;
+        } else if cursor_line_idx >= state.calendar_scroll + visible_height {
+            state.calendar_scroll = cursor_line_idx - visible_height + 1;
+        }
+        let max_scroll = lines.len().saturating_sub(visible_height);
+        state.calendar_scroll = state.calendar_scroll.min(max_scroll);
+    }
+
+    let end = (state.calendar_scroll + visible_height).min(lines.len());
+    let visible_lines: Vec<ListItem> = lines.drain(state.calendar_scroll..end).collect();
+    frame.render_widget(List::new(visible_lines), inner);
 }
 
 fn spinner_state(pending: &Option<(Uuid, Instant)>) -> Option<(char, u64)> {
