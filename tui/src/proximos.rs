@@ -15,6 +15,7 @@ pub struct ProximosEntry {
     pub time: String,
     pub kind: EntryKind,
     pub group_id: Option<i64>,
+    pub entity_id: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +68,7 @@ pub fn proximos(
                         time,
                         kind: EntryKind::Task { priority: task.priority },
                         group_id: task.group_id,
+                        entity_id: task.id,
                     });
                 }
             }
@@ -83,6 +85,7 @@ pub fn proximos(
                 time: event.start_time.clone(),
                 kind: EntryKind::Event,
                 group_id: event.group_id,
+                entity_id: event.id,
             });
         }
     }
@@ -118,7 +121,7 @@ pub fn add_24h(date: &str, time: &str) -> (String, String) {
     (format!("{ny:04}-{nmo:02}-{nd:02}"), time.to_string())
 }
 
-fn days_in_month(year: u32, month: u32) -> u32 {
+pub fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,

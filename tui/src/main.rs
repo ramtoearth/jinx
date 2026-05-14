@@ -35,12 +35,13 @@ use storage::{
 use uuid::Uuid;
 
 use jinx::app::{AppEvent, AppState, Modal, Panel, MIN_COLS, MIN_ROWS};
+use jinx::calendario::{entry_count, flat_entries, nth_entry, FlatCalEntry};
+use jinx::color::{detect_color_mode, resolve_style, ColorMode};
 use jinx::config::{self as app_config};
 use jinx::ipc::{
     AgentInitAckPayload, AgentInitPayload, AgentReplyPayload, Envelope, Kind, MessageType,
     ModelProvider, UserMessagePayload,
 };
-use jinx::proximos::{add_24h, proximos};
 use jinx::text_editor::TextEditor;
 
 // ---------------------------------------------------------------------------
@@ -118,28 +119,56 @@ const COLOR_PRESETS: [&str; 16] = [
     "#4caf50", "#2196f3", "#9c27b0", "#f44336",
 ];
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct TaskFormState {
     title: String,
     priority_idx: usize,  // 0=alta 1=media 2=baja
-    deadline: String,     // YYYY-MM-DD or empty
+    deadline: DateTimeInput,
     group_idx: usize,     // 0=ninguno, 1..=N = groups_cache[idx-1]
     status_idx: usize,    // 0=pendiente 1=completada 2=cancelada (edit only)
-    field: usize,         // active field
+    field: usize,         // active field: 0=title 1=priority 2=deadline 3=group 4=status(edit)
     edit_id: Option<i64>,
     error: Option<String>,
 }
 
-#[derive(Default, Clone)]
+impl Default for TaskFormState {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            priority_idx: 1,
+            deadline: DateTimeInput::date_only_disabled(),
+            group_idx: 0,
+            status_idx: 0,
+            field: 0,
+            edit_id: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct EventFormState {
     title: String,
-    start_date: String,   // YYYY-MM-DD
-    start_time: String,   // HH:MM
+    datetime: DateTimeInput,
     duration: String,     // minutes or empty
     group_idx: usize,
-    field: usize,
+    field: usize,         // 0=title 1=datetime 2=duration 3=group
     edit_id: Option<i64>,
     error: Option<String>,
+}
+
+impl Default for EventFormState {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            datetime: DateTimeInput::date_time_now(),
+            duration: String::new(),
+            group_idx: 0,
+            field: 0,
+            edit_id: None,
+            error: None,
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -160,6 +189,31 @@ struct SettingsFormState {
     host_input: String,
 }
 
+#[derive(Clone)]
+struct FilterFormState {
+    status_idx: usize,    // 0=pendiente, 1=todas, 2=completada, 3=cancelada
+    priority_idx: usize,  // 0=todas, 1=alta, 2=media, 3=baja
+    group_idx: usize,     // 0=todos, 1..N=grupo, N+1=sin grupo
+    date_idx: usize,      // 0=todas, 1=hoy, 2=esta semana, 3=este mes, 4=custom
+    date_from: DateTimeInput,
+    date_to: DateTimeInput,
+    field: usize,         // 0=status, 1=priority, 2=group, 3=fecha, 4=desde, 5=hasta
+}
+
+impl Default for FilterFormState {
+    fn default() -> Self {
+        Self {
+            status_idx: 0,
+            priority_idx: 0,
+            group_idx: 0,
+            date_idx: 0,
+            date_from: DateTimeInput::date_only_disabled(),
+            date_to: DateTimeInput::date_only_disabled(),
+            field: 0,
+        }
+    }
+}
+
 impl GroupFormState {
     fn effective_color(&self) -> &str {
         if !self.color_custom.is_empty() {
@@ -168,6 +222,320 @@ impl GroupFormState {
             COLOR_PRESETS[self.color_idx % COLOR_PRESETS.len()]
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Date/time segmented input widget
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DateInputResult {
+    Consumed,
+    NextField,
+}
+
+#[derive(Clone)]
+struct DateTimeInput {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    segment: usize,
+    has_time: bool,
+    enabled: bool,
+    typing_buf: String,
+}
+
+impl DateTimeInput {
+    fn date_only_disabled() -> Self {
+        let now = chrono::Utc::now();
+        Self {
+            year: now.format("%Y").to_string().parse().unwrap_or(2026),
+            month: now.format("%m").to_string().parse().unwrap_or(1),
+            day: now.format("%d").to_string().parse().unwrap_or(1),
+            hour: 0,
+            minute: 0,
+            segment: 0,
+            has_time: false,
+            enabled: false,
+            typing_buf: String::new(),
+        }
+    }
+
+    fn date_time_now() -> Self {
+        let now = chrono::Utc::now();
+        Self {
+            year: now.format("%Y").to_string().parse().unwrap_or(2026),
+            month: now.format("%m").to_string().parse().unwrap_or(1),
+            day: now.format("%d").to_string().parse().unwrap_or(1),
+            hour: now.format("%H").to_string().parse().unwrap_or(0),
+            minute: now.format("%M").to_string().parse().unwrap_or(0),
+            segment: 0,
+            has_time: true,
+            enabled: true,
+            typing_buf: String::new(),
+        }
+    }
+
+    fn from_iso(s: &str, has_time: bool) -> Self {
+        let date_part = if let Some(pos) = s.find('T') { &s[..pos] } else { s };
+        let parts: Vec<&str> = date_part.split('-').collect();
+        let year = parts.first().and_then(|p| p.parse().ok()).unwrap_or(2026);
+        let month = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(1);
+        let day = parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(1);
+
+        let (hour, minute) = if has_time {
+            if let Some(pos) = s.find('T') {
+                let time_part = &s[pos + 1..];
+                let hm: Vec<&str> = time_part.split(':').collect();
+                let h = hm.first().and_then(|p| p.parse().ok()).unwrap_or(0);
+                let m = hm.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+                (h, m)
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+
+        let mut input = Self {
+            year, month, day, hour, minute,
+            segment: 0, has_time, enabled: true, typing_buf: String::new(),
+        };
+        input.clamp();
+        input
+    }
+
+    fn from_date_time_strings(date: &str, time: &str) -> Self {
+        let parts: Vec<&str> = date.split('-').collect();
+        let year = parts.first().and_then(|p| p.parse().ok()).unwrap_or(2026);
+        let month = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(1);
+        let day = parts.get(2).and_then(|p| p.parse().ok()).unwrap_or(1);
+        let hm: Vec<&str> = time.split(':').collect();
+        let hour = hm.first().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let minute = hm.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+
+        let mut input = Self {
+            year, month, day, hour, minute,
+            segment: 0, has_time: true, enabled: true, typing_buf: String::new(),
+        };
+        input.clamp();
+        input
+    }
+
+    fn max_day(&self) -> u8 {
+        jinx::proximos::days_in_month(self.year as u32, self.month as u32) as u8
+    }
+
+    fn clamp(&mut self) {
+        self.year = self.year.clamp(2020, 2099);
+        self.month = self.month.clamp(1, 12);
+        self.day = self.day.clamp(1, self.max_day());
+        self.hour = self.hour.min(23);
+        self.minute = self.minute.min(59);
+    }
+
+    fn n_segments(&self) -> usize {
+        if self.has_time { 5 } else { 3 }
+    }
+
+    fn to_date_string(&self) -> Option<String> {
+        if !self.enabled { return None; }
+        Some(format!("{:04}-{:02}-{:02}", self.year, self.month, self.day))
+    }
+
+    fn to_time_string(&self) -> String {
+        format!("{:02}:{:02}", self.hour, self.minute)
+    }
+
+    fn to_iso_string(&self) -> Option<String> {
+        if !self.enabled { return None; }
+        Some(format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:00+00:00",
+            self.year, self.month, self.day, self.hour, self.minute
+        ))
+    }
+
+    fn commit_typing_buf(&mut self) {
+        if self.typing_buf.is_empty() { return; }
+        let val: u16 = self.typing_buf.parse().unwrap_or(0);
+        match self.segment {
+            0 => self.year = (val).clamp(2020, 2099),
+            1 => self.month = (val as u8).clamp(1, 12),
+            2 => {
+                self.day = (val as u8).clamp(1, self.max_day());
+            }
+            3 => self.hour = (val as u8).min(23),
+            4 => self.minute = (val as u8).min(59),
+            _ => {}
+        }
+        self.typing_buf.clear();
+        self.clamp();
+    }
+
+    fn segment_max_digits(&self) -> usize {
+        if self.segment == 0 { 4 } else { 2 }
+    }
+
+    fn handle_key(&mut self, code: KeyCode) -> DateInputResult {
+        if !self.enabled {
+            match code {
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    self.enabled = true;
+                    return DateInputResult::Consumed;
+                }
+                KeyCode::Tab => return DateInputResult::NextField,
+                _ => return DateInputResult::Consumed,
+            }
+        }
+
+        match code {
+            KeyCode::Left => {
+                self.commit_typing_buf();
+                if self.segment > 0 {
+                    self.segment -= 1;
+                }
+                DateInputResult::Consumed
+            }
+            KeyCode::Right => {
+                self.commit_typing_buf();
+                if self.segment + 1 < self.n_segments() {
+                    self.segment += 1;
+                }
+                DateInputResult::Consumed
+            }
+            KeyCode::Up => {
+                self.commit_typing_buf();
+                match self.segment {
+                    0 if self.year < 2099 => { self.year += 1; }
+                    1 => { self.month = if self.month >= 12 { 1 } else { self.month + 1 }; }
+                    2 => {
+                        let max = self.max_day();
+                        self.day = if self.day >= max { 1 } else { self.day + 1 };
+                    }
+                    3 => { self.hour = if self.hour >= 23 { 0 } else { self.hour + 1 }; }
+                    4 => { self.minute = if self.minute >= 59 { 0 } else { self.minute + 1 }; }
+                    _ => {}
+                }
+                self.clamp();
+                DateInputResult::Consumed
+            }
+            KeyCode::Down => {
+                self.commit_typing_buf();
+                match self.segment {
+                    0 if self.year > 2020 => { self.year -= 1; }
+                    1 => { self.month = if self.month <= 1 { 12 } else { self.month - 1 }; }
+                    2 => {
+                        let max = self.max_day();
+                        self.day = if self.day <= 1 { max } else { self.day - 1 };
+                    }
+                    3 => { self.hour = if self.hour == 0 { 23 } else { self.hour - 1 }; }
+                    4 => { self.minute = if self.minute == 0 { 59 } else { self.minute - 1 }; }
+                    _ => {}
+                }
+                self.clamp();
+                DateInputResult::Consumed
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                self.typing_buf.push(c);
+                if self.typing_buf.len() >= self.segment_max_digits() {
+                    self.commit_typing_buf();
+                    if self.segment + 1 < self.n_segments() {
+                        self.segment += 1;
+                    }
+                }
+                DateInputResult::Consumed
+            }
+            KeyCode::Backspace => {
+                if self.typing_buf.pop().is_none() && self.segment > 0 {
+                    self.segment -= 1;
+                }
+                DateInputResult::Consumed
+            }
+            KeyCode::Delete => {
+                if !self.has_time {
+                    self.enabled = false;
+                }
+                DateInputResult::Consumed
+            }
+            KeyCode::Tab => {
+                self.commit_typing_buf();
+                DateInputResult::NextField
+            }
+            _ => DateInputResult::Consumed,
+        }
+    }
+}
+
+fn date_input_line<'a>(label: &'a str, input: &DateTimeInput, field_active: bool) -> Line<'a> {
+    let label_style = if field_active {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let mut spans: Vec<Span<'static>> = vec![
+        Span::styled(format!("  {:16}", label), label_style),
+    ];
+
+    if !input.enabled {
+        let hint = if field_active { "(Enter para activar, Tab siguiente)" } else { "(sin fecha)" };
+        spans.push(Span::styled(hint.to_string(), Style::default().fg(Color::DarkGray)));
+        return Line::from(spans);
+    }
+
+    let segments: Vec<String> = if input.has_time {
+        vec![
+            format!("{:04}", input.year),
+            format!("{:02}", input.month),
+            format!("{:02}", input.day),
+            format!("{:02}", input.hour),
+            format!("{:02}", input.minute),
+        ]
+    } else {
+        vec![
+            format!("{:04}", input.year),
+            format!("{:02}", input.month),
+            format!("{:02}", input.day),
+        ]
+    };
+
+    let separators: Vec<&str> = if input.has_time {
+        vec!["-", "-", "  ", ":"]
+    } else {
+        vec!["-", "-"]
+    };
+
+    for (i, seg) in segments.iter().enumerate() {
+        let display = if field_active && i == input.segment && !input.typing_buf.is_empty() {
+            let pad = if i == 0 { 4 } else { 2 };
+            format!("{:_<pad$}", input.typing_buf, pad = pad)
+        } else {
+            seg.clone()
+        };
+
+        let style = if field_active && i == input.segment {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else if field_active {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(display, style));
+        if i < separators.len() {
+            spans.push(Span::raw(separators[i].to_string()));
+        }
+    }
+
+    if field_active {
+        spans.push(Span::styled(
+            "  ←/→:seg ↑↓:±1 Del:quitar".to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    Line::from(spans)
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +579,57 @@ fn main() -> io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Tareas panel sub-section and filter state
+// ---------------------------------------------------------------------------
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum TareasSection {
+    #[default]
+    Tasks,
+    Groups,
+}
+
+#[derive(Clone)]
+struct ActiveTaskFilter {
+    status: Option<TaskStatus>,
+    group_id: Option<Option<i64>>,
+    priority: Option<Priority>,
+    from_date: Option<String>,
+    to_date: Option<String>,
+}
+
+impl Default for ActiveTaskFilter {
+    fn default() -> Self {
+        Self {
+            status: Some(TaskStatus::Pendiente),
+            group_id: None,
+            priority: None,
+            from_date: None,
+            to_date: None,
+        }
+    }
+}
+
+impl ActiveTaskFilter {
+    fn to_storage_filter(&self) -> TaskFilter {
+        TaskFilter {
+            status: self.status,
+            group_id: self.group_id,
+            from_date: self.from_date.clone(),
+            to_date: self.to_date.clone(),
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        self.status == Some(TaskStatus::Pendiente)
+            && self.group_id.is_none()
+            && self.priority.is_none()
+            && self.from_date.is_none()
+            && self.to_date.is_none()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Application state and loop
 // ---------------------------------------------------------------------------
 
@@ -221,7 +640,12 @@ struct RuntimeState {
     chat_scroll: usize, // lines from bottom; 0 = pinned to bottom
     task_cursor: usize,
     calendar_cursor: usize,
+    calendar_scroll: usize,
+    calendar_scroll_initialized: bool,
     group_cursor: usize,
+    tareas_section: TareasSection,
+    tareas_filter: ActiveTaskFilter,
+    color_mode: ColorMode,
     storage: Arc<dyn Storage + Send + Sync>,
     agent_child: Option<Child>,
     agent_stdin: Option<ChildStdin>,
@@ -232,6 +656,7 @@ struct RuntimeState {
     event_form: EventFormState,
     group_form: GroupFormState,
     settings_form: SettingsFormState,
+    filter_form: FilterFormState,
     groups_cache: Vec<Group>,
     delete_confirm_name: String,
     // Layout rects for mouse hit-testing
@@ -256,7 +681,12 @@ fn run_app(
         chat_scroll: 0,
         task_cursor: 0,
         calendar_cursor: 0,
+        calendar_scroll: 0,
+        calendar_scroll_initialized: false,
         group_cursor: 0,
+        tareas_section: TareasSection::default(),
+        tareas_filter: ActiveTaskFilter::default(),
+        color_mode: detect_color_mode(),
         storage: storage.clone(),
         agent_child: None,
         agent_stdin: None,
@@ -266,6 +696,7 @@ fn run_app(
         event_form: EventFormState::default(),
         group_form: GroupFormState::default(),
         settings_form: SettingsFormState::default(),
+        filter_form: FilterFormState::default(),
         groups_cache: Vec::new(),
         delete_confirm_name: String::new(),
         panel_area: None,
@@ -373,7 +804,6 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         Panel::Chat => handle_chat_key(state, key),
         Panel::Tareas => handle_tareas_key(state, key),
         Panel::Calendario => handle_calendario_key(state, key),
-        Panel::Proximos => handle_proximos_key(state, key),
     }
 }
 
@@ -481,7 +911,6 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
             match state.app.focused_panel {
                 Panel::Tareas => { if state.task_cursor > 0 { state.task_cursor -= 1; } }
                 Panel::Calendario => { if state.calendar_cursor > 0 { state.calendar_cursor -= 1; } }
-                Panel::Proximos => { if state.group_cursor > 0 { state.group_cursor -= 1; } }
                 _ => { state.chat_scroll = state.chat_scroll.saturating_add(3); }
             }
         }
@@ -500,16 +929,16 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
             }
             match state.app.focused_panel {
                 Panel::Tareas => {
-                    let count = state.storage.list_tasks(TaskFilter { status: Some(TaskStatus::Pendiente), ..Default::default() }).unwrap_or_default().len();
+                    let count = state.storage.list_tasks(state.tareas_filter.to_storage_filter()).unwrap_or_default().len();
                     if state.task_cursor + 1 < count { state.task_cursor += 1; }
                 }
                 Panel::Calendario => {
-                    let count = state.storage.list_events(None, None).unwrap_or_default().len();
+                    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
+                    let events = state.storage.list_events(None, None).unwrap_or_default();
+                    let view = jinx::calendario::calendar_layout(&tasks, &events);
+                    let flat = flat_entries(&view);
+                    let count = entry_count(&flat);
                     if state.calendar_cursor + 1 < count { state.calendar_cursor += 1; }
-                }
-                Panel::Proximos => {
-                    let count = state.storage.list_groups().unwrap_or_default().len();
-                    if state.group_cursor + 1 < count { state.group_cursor += 1; }
                 }
                 _ => { state.chat_scroll = state.chat_scroll.saturating_sub(3); }
             }
@@ -538,16 +967,11 @@ fn handle_paste(state: &mut RuntimeState, data: String) {
 fn handle_modal_paste(state: &mut RuntimeState, data: &str) {
     let clean: String = data.chars().filter(|&c| c != '\n' && c != '\r').collect();
     match &state.app.modal {
-        Some(Modal::NewTask) | Some(Modal::EditTask { .. }) => match state.task_form.field {
-            0 => state.task_form.title.push_str(&clean),
-            2 => state.task_form.deadline.push_str(&clean),
-            _ => {}
-        },
+        Some(Modal::NewTask) | Some(Modal::EditTask { .. })
+            if state.task_form.field == 0 => { state.task_form.title.push_str(&clean); }
         Some(Modal::NewEvent) | Some(Modal::EditEvent { .. }) => match state.event_form.field {
             0 => state.event_form.title.push_str(&clean),
-            1 => state.event_form.start_date.push_str(&clean),
-            2 => state.event_form.start_time.push_str(&clean),
-            3 => state.event_form.duration.push_str(&clean),
+            2 => state.event_form.duration.push_str(&clean),
             _ => {}
         },
         Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => match state.group_form.field {
@@ -565,10 +989,22 @@ fn handle_modal_paste(state: &mut RuntimeState, data: &str) {
 }
 
 fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
-    let tasks = state
-        .storage
-        .list_tasks(TaskFilter { status: Some(TaskStatus::Pendiente), ..Default::default() })
-        .unwrap_or_default();
+    if key.code == KeyCode::Char('s') {
+        state.tareas_section = match state.tareas_section {
+            TareasSection::Tasks => TareasSection::Groups,
+            TareasSection::Groups => TareasSection::Tasks,
+        };
+        return;
+    }
+
+    match state.tareas_section {
+        TareasSection::Tasks => handle_tareas_tasks_key(state, key),
+        TareasSection::Groups => handle_tareas_groups_key(state, key),
+    }
+}
+
+fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    let tasks = get_filtered_tasks(state);
     match key.code {
         KeyCode::Up if state.task_cursor > 0 => {
             state.task_cursor -= 1;
@@ -584,11 +1020,21 @@ fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) 
         }
         KeyCode::Char('c') => {
             if let Some(t) = tasks.get(state.task_cursor) {
-                let id = t.id;
-                match state.storage.complete_task(id) {
+                let new_status = if t.status == TaskStatus::Completada {
+                    TaskStatus::Pendiente
+                } else {
+                    TaskStatus::Completada
+                };
+                match state.storage.update_task(
+                    t.id,
+                    TaskPatch { status: Some(new_status), ..Default::default() },
+                ) {
                     Ok(_) => {
-                        state.app.status_bar = "Tarea completada.".to_string();
-                        if state.task_cursor > 0 { state.task_cursor -= 1; }
+                        state.app.status_bar = if new_status == TaskStatus::Completada {
+                            "Tarea completada.".to_string()
+                        } else {
+                            "Tarea marcada como pendiente.".to_string()
+                        };
                     }
                     Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
                 }
@@ -601,36 +1047,20 @@ fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) 
             }
         }
         KeyCode::Char('g') => open_new_group_modal(state),
+        KeyCode::Char('f') => open_filter_modal(state),
         _ => {}
     }
 }
 
-fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
-    let events = state.storage.list_events(None, None).unwrap_or_default();
-    match key.code {
-        KeyCode::Up if state.calendar_cursor > 0 => { state.calendar_cursor -= 1; }
-        KeyCode::Down if state.calendar_cursor + 1 < events.len() => { state.calendar_cursor += 1; }
-        KeyCode::Char('n') => open_new_event_modal(state),
-        KeyCode::Char('e') => {
-            if let Some(ev) = events.get(state.calendar_cursor) {
-                open_edit_event_modal(state, ev.id);
-            }
-        }
-        KeyCode::Char('d') => {
-            if let Some(ev) = events.get(state.calendar_cursor) {
-                state.delete_confirm_name = ev.title.clone();
-                state.app.modal = Some(Modal::DeleteEvent { id: ev.id });
-            }
-        }
-        _ => {}
-    }
-}
-
-fn handle_proximos_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+fn handle_tareas_groups_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let groups = state.storage.list_groups().unwrap_or_default();
     match key.code {
-        KeyCode::Up if state.group_cursor > 0 => { state.group_cursor -= 1; }
-        KeyCode::Down if state.group_cursor + 1 < groups.len() => { state.group_cursor += 1; }
+        KeyCode::Up if state.group_cursor > 0 => {
+            state.group_cursor -= 1;
+        }
+        KeyCode::Down if state.group_cursor + 1 < groups.len() => {
+            state.group_cursor += 1;
+        }
         KeyCode::Char('g') => open_new_group_modal(state),
         KeyCode::Char('e') => {
             if let Some(g) = groups.get(state.group_cursor) {
@@ -646,6 +1076,81 @@ fn handle_proximos_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent
         _ => {}
     }
 }
+
+fn get_filtered_tasks(state: &RuntimeState) -> Vec<storage::Task> {
+    let mut tasks = state
+        .storage
+        .list_tasks(state.tareas_filter.to_storage_filter())
+        .unwrap_or_default();
+    if let Some(p) = state.tareas_filter.priority {
+        tasks.retain(|t| t.priority == p);
+    }
+    tasks
+}
+
+fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
+    let events = state.storage.list_events(None, None).unwrap_or_default();
+    let view = jinx::calendario::calendar_layout(&tasks, &events);
+    let flat = flat_entries(&view);
+    let count = entry_count(&flat);
+
+    match key.code {
+        KeyCode::Up if state.calendar_cursor > 0 => {
+            state.calendar_cursor -= 1;
+        }
+        KeyCode::Down if count > 0 && state.calendar_cursor + 1 < count => {
+            state.calendar_cursor += 1;
+        }
+        KeyCode::Char('n') => open_new_event_modal(state),
+        KeyCode::Char('e') => {
+            if let Some(entry) = nth_entry(&flat, state.calendar_cursor) {
+                if entry.is_task {
+                    open_edit_task_modal(state, entry.entity_id);
+                } else {
+                    open_edit_event_modal(state, entry.entity_id);
+                }
+            }
+        }
+        KeyCode::Char('c') => {
+            if let Some(entry) = nth_entry(&flat, state.calendar_cursor) {
+                if entry.is_task {
+                    let task = tasks.iter().find(|t| t.id == entry.entity_id);
+                    let new_status = if task.map(|t| t.status) == Some(TaskStatus::Completada) {
+                        TaskStatus::Pendiente
+                    } else {
+                        TaskStatus::Completada
+                    };
+                    match state.storage.update_task(
+                        entry.entity_id,
+                        TaskPatch { status: Some(new_status), ..Default::default() },
+                    ) {
+                        Ok(_) => {
+                            state.app.status_bar = if new_status == TaskStatus::Completada {
+                                "Tarea completada.".to_string()
+                            } else {
+                                "Tarea marcada como pendiente.".to_string()
+                            };
+                        }
+                        Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
+                    }
+                }
+            }
+        }
+        KeyCode::Char('d') => {
+            if let Some(entry) = nth_entry(&flat, state.calendar_cursor) {
+                state.delete_confirm_name = entry.text.clone();
+                if entry.is_task {
+                    state.app.modal = Some(Modal::DeleteTask { id: entry.entity_id });
+                } else {
+                    state.app.modal = Some(Modal::DeleteEvent { id: entry.entity_id });
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Modal open helpers
@@ -678,14 +1183,19 @@ fn open_edit_task_modal(state: &mut RuntimeState, id: i64) {
         let group_idx = t.group_id
             .and_then(|gid| state.groups_cache.iter().position(|g| g.id == gid).map(|p| p + 1))
             .unwrap_or(0);
+        let deadline = match &t.deadline {
+            Some(s) => DateTimeInput::from_iso(s, false),
+            None => DateTimeInput::date_only_disabled(),
+        };
         state.task_form = TaskFormState {
             title: t.title.clone(),
             priority_idx,
-            deadline: t.deadline.clone().unwrap_or_default(),
+            deadline,
             group_idx,
             status_idx,
+            field: 0,
             edit_id: Some(id),
-            ..Default::default()
+            error: None,
         };
         state.app.modal = Some(Modal::EditTask { id });
     }
@@ -706,12 +1216,12 @@ fn open_edit_event_modal(state: &mut RuntimeState, id: i64) {
             .unwrap_or(0);
         state.event_form = EventFormState {
             title: ev.title.clone(),
-            start_date: ev.start_date.clone(),
-            start_time: ev.start_time.clone(),
+            datetime: DateTimeInput::from_date_time_strings(&ev.start_date, &ev.start_time),
             duration: ev.duration_minutes.map(|d| d.to_string()).unwrap_or_default(),
             group_idx,
+            field: 0,
             edit_id: Some(id),
-            ..Default::default()
+            error: None,
         };
         state.app.modal = Some(Modal::EditEvent { id });
     }
@@ -741,6 +1251,188 @@ fn open_edit_group_modal(state: &mut RuntimeState, id: i64) {
         };
         state.app.modal = Some(Modal::EditGroup { id });
     }
+}
+
+fn open_filter_modal(state: &mut RuntimeState) {
+    refresh_groups_cache(state);
+    let (date_idx, date_from, date_to) = match (&state.tareas_filter.from_date, &state.tareas_filter.to_date) {
+        (None, None) => (0, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled()),
+        (Some(f), Some(t)) => {
+            let today = today_str();
+            let (wk_m, wk_s) = week_bounds();
+            let (mo_f, mo_l) = month_bounds();
+            if f == &today && t == &today {
+                (1, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+            } else if f == &wk_m && t == &wk_s {
+                (2, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+            } else if f == &mo_f && t == &mo_l {
+                (3, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+            } else {
+                (4, DateTimeInput::from_iso(f, false), DateTimeInput::from_iso(t, false))
+            }
+        }
+        (Some(f), None) => (4, DateTimeInput::from_iso(f, false), DateTimeInput::date_only_disabled()),
+        (None, Some(t)) => (4, DateTimeInput::date_only_disabled(), DateTimeInput::from_iso(t, false)),
+    };
+    state.filter_form = FilterFormState {
+        status_idx: match state.tareas_filter.status {
+            Some(TaskStatus::Pendiente) => 0,
+            None => 1,
+            Some(TaskStatus::Completada) => 2,
+            Some(TaskStatus::Cancelada) => 3,
+        },
+        priority_idx: match state.tareas_filter.priority {
+            None => 0,
+            Some(Priority::Alta) => 1,
+            Some(Priority::Media) => 2,
+            Some(Priority::Baja) => 3,
+        },
+        group_idx: match state.tareas_filter.group_id {
+            None => 0,
+            Some(Some(gid)) => {
+                state.groups_cache.iter().position(|g| g.id == gid).map(|i| i + 1).unwrap_or(0)
+            }
+            Some(None) => state.groups_cache.len() + 1,
+        },
+        date_idx,
+        date_from,
+        date_to,
+        field: 0,
+    };
+    state.app.modal = Some(Modal::FilterTasks);
+}
+
+fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    let n_groups = state.groups_cache.len();
+    let is_custom = state.filter_form.date_idx == 4;
+    let n_fields: usize = if is_custom { 6 } else { 4 };
+
+    if state.filter_form.field == 4 && is_custom {
+        match state.filter_form.date_from.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => {
+                state.filter_form.field = 5;
+                return;
+            }
+        }
+    }
+    if state.filter_form.field == 5 && is_custom {
+        match state.filter_form.date_to.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => {
+                state.filter_form.field = 0;
+                return;
+            }
+        }
+    }
+
+    match key.code {
+        KeyCode::Tab => {
+            let next = (state.filter_form.field + 1) % n_fields;
+            state.filter_form.field = if !is_custom && next > 3 { 0 } else { next };
+        }
+        KeyCode::BackTab => {
+            let prev = if state.filter_form.field == 0 { n_fields - 1 } else { state.filter_form.field - 1 };
+            state.filter_form.field = if !is_custom && prev > 3 { 3 } else { prev };
+        }
+        KeyCode::Left => match state.filter_form.field {
+            0 => state.filter_form.status_idx = (state.filter_form.status_idx + 3) % 4,
+            1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 3) % 4,
+            2 => {
+                let n = n_groups + 2;
+                state.filter_form.group_idx = (state.filter_form.group_idx + n - 1) % n;
+            }
+            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 4) % 5,
+            _ => {}
+        },
+        KeyCode::Right => match state.filter_form.field {
+            0 => state.filter_form.status_idx = (state.filter_form.status_idx + 1) % 4,
+            1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 1) % 4,
+            2 => {
+                let n = n_groups + 2;
+                state.filter_form.group_idx = (state.filter_form.group_idx + 1) % n;
+            }
+            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 1) % 5,
+            _ => {}
+        },
+        KeyCode::Char('r') => {
+            state.filter_form = FilterFormState::default();
+        }
+        KeyCode::Enter => {
+            apply_filter(state);
+        }
+        KeyCode::Esc => {
+            state.app.modal = None;
+        }
+        _ => {}
+    }
+
+    if state.filter_form.date_idx == 4 {
+        state.filter_form.date_from.enabled = true;
+        state.filter_form.date_to.enabled = true;
+    }
+}
+
+fn today_str() -> String {
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
+fn week_bounds() -> (String, String) {
+    let now = chrono::Utc::now();
+    let weekday = now.format("%u").to_string().parse::<i64>().unwrap_or(1);
+    let monday = now - chrono::Duration::days(weekday - 1);
+    let sunday = monday + chrono::Duration::days(6);
+    (
+        monday.format("%Y-%m-%d").to_string(),
+        sunday.format("%Y-%m-%d").to_string(),
+    )
+}
+
+fn month_bounds() -> (String, String) {
+    let now = chrono::Utc::now();
+    let year: u32 = now.format("%Y").to_string().parse().unwrap_or(2026);
+    let month: u32 = now.format("%m").to_string().parse().unwrap_or(1);
+    let last_day = jinx::proximos::days_in_month(year, month);
+    (
+        format!("{:04}-{:02}-01", year, month),
+        format!("{:04}-{:02}-{:02}", year, month, last_day),
+    )
+}
+
+fn apply_filter(state: &mut RuntimeState) {
+    let form = &state.filter_form;
+    state.tareas_filter.status = match form.status_idx {
+        0 => Some(TaskStatus::Pendiente),
+        1 => None,
+        2 => Some(TaskStatus::Completada),
+        3 => Some(TaskStatus::Cancelada),
+        _ => Some(TaskStatus::Pendiente),
+    };
+    state.tareas_filter.priority = match form.priority_idx {
+        0 => None,
+        1 => Some(Priority::Alta),
+        2 => Some(Priority::Media),
+        3 => Some(Priority::Baja),
+        _ => None,
+    };
+    let n_groups = state.groups_cache.len();
+    state.tareas_filter.group_id = match form.group_idx {
+        0 => None,
+        i if i <= n_groups => Some(Some(state.groups_cache[i - 1].id)),
+        _ => Some(None),
+    };
+    let (from_date, to_date) = match form.date_idx {
+        0 => (None, None),
+        1 => { let t = today_str(); (Some(t.clone()), Some(t)) }
+        2 => { let (m, s) = week_bounds(); (Some(m), Some(s)) }
+        3 => { let (f, l) = month_bounds(); (Some(f), Some(l)) }
+        4 => (form.date_from.to_date_string(), form.date_to.to_date_string()),
+        _ => (None, None),
+    };
+    state.tareas_filter.from_date = from_date;
+    state.tareas_filter.to_date = to_date;
+    state.task_cursor = 0;
+    state.app.modal = None;
 }
 
 fn open_settings_modal(state: &mut RuntimeState) {
@@ -867,6 +1559,7 @@ fn handle_modal_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
             }
         }),
         Some(Modal::Settings) => handle_settings_form_key(state, key),
+        Some(Modal::FilterTasks) => handle_filter_form_key(state, key),
         _ => { if key.code == KeyCode::Esc { state.app.modal = None; } }
     }
 }
@@ -888,6 +1581,17 @@ fn handle_delete_key<F: FnOnce(&mut RuntimeState)>(
 fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let is_edit = state.task_form.edit_id.is_some();
     let n_fields = if is_edit { 5 } else { 4 };
+
+    if state.task_form.field == 2 {
+        match state.task_form.deadline.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => {
+                state.task_form.field = (state.task_form.field + 1) % n_fields;
+                return;
+            }
+        }
+    }
+
     match key.code {
         KeyCode::Tab => state.task_form.field = (state.task_form.field + 1) % n_fields,
         KeyCode::BackTab => state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields,
@@ -903,16 +1607,8 @@ fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEven
             4 => state.task_form.status_idx = (state.task_form.status_idx + 1) % 3,
             _ => {}
         },
-        KeyCode::Char(c) => match state.task_form.field {
-            0 => state.task_form.title.push(c),
-            2 => state.task_form.deadline.push(c),
-            _ => {}
-        },
-        KeyCode::Backspace => match state.task_form.field {
-            0 => { state.task_form.title.pop(); }
-            2 => { state.task_form.deadline.pop(); }
-            _ => {}
-        },
+        KeyCode::Char(c) if state.task_form.field == 0 => { state.task_form.title.push(c); }
+        KeyCode::Backspace if state.task_form.field == 0 => { state.task_form.title.pop(); }
         KeyCode::Enter => save_task(state),
         KeyCode::Esc => { state.app.modal = None; state.task_form.error = None; }
         _ => {}
@@ -920,30 +1616,37 @@ fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEven
 }
 
 fn handle_event_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
-    let n_fields = 5;
+    let n_fields = 4; // title, datetime, duration, group
+
+    if state.event_form.field == 1 {
+        match state.event_form.datetime.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => {
+                state.event_form.field = (state.event_form.field + 1) % n_fields;
+                return;
+            }
+        }
+    }
+
     match key.code {
         KeyCode::Tab => state.event_form.field = (state.event_form.field + 1) % n_fields,
         KeyCode::BackTab => state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields,
-        KeyCode::Left if state.event_form.field == 4 => {
+        KeyCode::Left if state.event_form.field == 3 => {
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + n - 1) % n;
         }
-        KeyCode::Right if state.event_form.field == 4 => {
+        KeyCode::Right if state.event_form.field == 3 => {
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + 1) % n;
         }
         KeyCode::Char(c) => match state.event_form.field {
             0 => state.event_form.title.push(c),
-            1 => state.event_form.start_date.push(c),
-            2 => state.event_form.start_time.push(c),
-            3 => state.event_form.duration.push(c),
+            2 => state.event_form.duration.push(c),
             _ => {}
         },
         KeyCode::Backspace => match state.event_form.field {
             0 => { state.event_form.title.pop(); }
-            1 => { state.event_form.start_date.pop(); }
-            2 => { state.event_form.start_time.pop(); }
-            3 => { state.event_form.duration.pop(); }
+            2 => { state.event_form.duration.pop(); }
             _ => {}
         },
         KeyCode::Enter => save_event(state),
@@ -991,7 +1694,7 @@ fn save_task(state: &mut RuntimeState) {
     let priorities = [Priority::Alta, Priority::Media, Priority::Baja];
     let statuses = [TaskStatus::Pendiente, TaskStatus::Completada, TaskStatus::Cancelada];
     let priority = priorities[form.priority_idx];
-    let deadline = if form.deadline.trim().is_empty() { None } else { Some(form.deadline.trim().to_string()) };
+    let deadline = form.deadline.to_iso_string();
     let group_id = if form.group_idx == 0 { None } else {
         state.groups_cache.get(form.group_idx - 1).map(|g| g.id)
     };
@@ -1029,12 +1732,10 @@ fn save_event(state: &mut RuntimeState) {
         state.event_form.error = Some("El título no puede estar vacío.".to_string());
         return;
     }
-    if form.start_date.trim().is_empty() {
+    let start_date = form.datetime.to_date_string().unwrap_or_default();
+    let start_time = form.datetime.to_time_string();
+    if start_date.is_empty() {
         state.event_form.error = Some("La fecha de inicio es obligatoria.".to_string());
-        return;
-    }
-    if form.start_time.trim().is_empty() {
-        state.event_form.error = Some("La hora de inicio es obligatoria.".to_string());
         return;
     }
     let duration_minutes: Option<u32> = if form.duration.trim().is_empty() {
@@ -1052,16 +1753,16 @@ fn save_event(state: &mut RuntimeState) {
     let result: Result<_, _> = if let Some(id) = form.edit_id {
         state.storage.update_event(id, EventPatch {
             title: Some(form.title.trim().to_string()),
-            start_date: Some(form.start_date.trim().to_string()),
-            start_time: Some(form.start_time.trim().to_string()),
+            start_date: Some(start_date.clone()),
+            start_time: Some(start_time.clone()),
             duration_minutes: Some(duration_minutes),
             group_id: Some(group_id),
         }).map(|_| ())
     } else {
         state.storage.create_event(NewEvent {
             title: form.title.trim().to_string(),
-            start_date: form.start_date.trim().to_string(),
-            start_time: form.start_time.trim().to_string(),
+            start_date,
+            start_time,
             duration_minutes,
             group_id,
         }).map(|_| ())
@@ -1346,7 +2047,6 @@ fn render(frame: &mut ratatui::Frame, state: &mut RuntimeState) {
         Panel::Chat => render_chat(frame, state, chunks[1]),
         Panel::Tareas => render_tareas(frame, state, chunks[1]),
         Panel::Calendario => render_calendario(frame, state, chunks[1]),
-        Panel::Proximos => render_proximos(frame, state, chunks[1]),
     }
 
     render_status(frame, state, chunks[2]);
@@ -1362,9 +2062,8 @@ fn render_tabs(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         Panel::Chat => 0,
         Panel::Tareas => 1,
         Panel::Calendario => 2,
-        Panel::Proximos => 3,
     };
-    let tabs = Tabs::new(vec!["  Chat  ", "  Tareas  ", "  Calendario  ", "  Próximos  "])
+    let tabs = Tabs::new(vec!["  Chat  ", "  Tareas  ", "  Calendario  "])
         .select(active)
         .block(Block::default().borders(Borders::ALL))
         .style(Style::default().fg(Color::DarkGray))
@@ -1417,6 +2116,7 @@ fn render_modal(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
             render_delete_confirm(frame, state, popup);
         }
         Some(Modal::Settings) => render_settings_form(frame, state, popup),
+        Some(Modal::FilterTasks) => render_filter_form(frame, state, popup),
         _ => {}
     }
 }
@@ -1432,6 +2132,60 @@ fn form_line<'a>(label: &'a str, value: String, active: bool) -> Line<'a> {
         Span::styled(format!("  {:16}", label), ls),
         Span::styled(value, vs),
     ])
+}
+
+fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    let form = &state.filter_form;
+    let block = Block::default()
+        .title("Filtrar Tareas")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let status_labels = ["pendiente", "todas", "completada", "cancelada"];
+    let priority_labels = ["todas", "alta", "media", "baja"];
+
+    let group_label = match form.group_idx {
+        0 => "todos".to_string(),
+        i if i <= state.groups_cache.len() => state.groups_cache[i - 1].name.clone(),
+        _ => "sin grupo".to_string(),
+    };
+
+    let date_labels = ["todas", "hoy", "esta semana", "este mes", "custom"];
+
+    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+    lines.push(form_line(
+        "Estado",
+        format!("← {} →", status_labels[form.status_idx]),
+        form.field == 0,
+    ));
+    lines.push(form_line(
+        "Prioridad",
+        format!("← {} →", priority_labels[form.priority_idx]),
+        form.field == 1,
+    ));
+    lines.push(form_line(
+        "Grupo",
+        format!("← {} →", group_label),
+        form.field == 2,
+    ));
+    lines.push(form_line(
+        "Fecha",
+        format!("← {} →", date_labels[form.date_idx]),
+        form.field == 3,
+    ));
+    if form.date_idx == 4 {
+        lines.push(date_input_line("  Desde", &form.date_from, form.field == 4));
+        lines.push(date_input_line("  Hasta", &form.date_to, form.field == 5));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Tab:campo  ←/→:opción  Enter:aplicar  Esc:cancelar  r:resetear",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_task_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
@@ -1452,11 +2206,7 @@ fn render_task_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
     lines.push(form_line("Título", form.title.clone(), form.field == 0));
     lines.push(form_line("Prioridad", format!("← {} →", priorities[form.priority_idx]), form.field == 1));
-    lines.push(form_line(
-        "Fecha límite",
-        if form.deadline.is_empty() { "(YYYY-MM-DD o vacío)".into() } else { form.deadline.clone() },
-        form.field == 2,
-    ));
+    lines.push(date_input_line("Fecha límite", &form.deadline, form.field == 2));
     lines.push(form_line(
         "Grupo",
         format!("← {} →", groups.get(form.group_idx).map(String::as_str).unwrap_or("(ninguno)")),
@@ -1491,13 +2241,12 @@ fn render_event_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
     lines.push(form_line("Título", form.title.clone(), form.field == 0));
-    lines.push(form_line("Fecha inicio", if form.start_date.is_empty() { "(YYYY-MM-DD)".into() } else { form.start_date.clone() }, form.field == 1));
-    lines.push(form_line("Hora inicio", if form.start_time.is_empty() { "(HH:MM)".into() } else { form.start_time.clone() }, form.field == 2));
-    lines.push(form_line("Duración (min)", if form.duration.is_empty() { "(vacío = sin límite)".into() } else { form.duration.clone() }, form.field == 3));
+    lines.push(date_input_line("Fecha/Hora", &form.datetime, form.field == 1));
+    lines.push(form_line("Duración (min)", if form.duration.is_empty() { "(vacío = sin límite)".into() } else { form.duration.clone() }, form.field == 2));
     lines.push(form_line(
         "Grupo",
         format!("← {} →", groups.get(form.group_idx).map(String::as_str).unwrap_or("(ninguno)")),
-        form.field == 4,
+        form.field == 3,
     ));
     lines.push(Line::from(""));
     if let Some(ref err) = form.error {
@@ -1800,114 +2549,163 @@ fn calculate_cursor_position(editor: &TextEditor, area: Rect) -> (u16, u16) {
     (x, y)
 }
 
-fn render_proximos(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let block = panel_block("Próximos");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
-    let events = state.storage.list_events(None, None).unwrap_or_default();
-
-    let now = chrono::Utc::now();
-    let now_date = now.format("%Y-%m-%d").to_string();
-    let now_time = now.format("%H:%M").to_string();
-    let (end_date, end_time) = add_24h(&now_date, &now_time);
-
-    let entries = proximos(&tasks, &events, &now_date, &now_time, &end_date, &end_time);
-
-    let mut items: Vec<ListItem> = entries
-        .iter()
-        .map(|e| {
-            let label = match e.kind {
-                jinx::proximos::EntryKind::Task { priority } => {
-                    format!("▸ {} ({}) [{} {}]", e.title, priority.as_str(), e.date, e.time)
-                }
-                jinx::proximos::EntryKind::Event => {
-                    format!("● {} [{} {}]", e.title, e.date, e.time)
-                }
-            };
-            ListItem::new(label)
-        })
-        .collect();
-
-    // Groups section at the bottom
-    let groups = state.storage.list_groups().unwrap_or_default();
-    if !items.is_empty() {
-        items.push(ListItem::new(Line::from("")));
-    }
-    items.push(ListItem::new(Line::from(Span::styled(
-        "── Grupos ──",
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-    ))));
-    if groups.is_empty() {
-        items.push(ListItem::new("  (sin grupos)"));
-    } else {
-        for (i, g) in groups.iter().enumerate() {
-            let selected = i == state.group_cursor;
-            let label = format!(
-                " {} {} ({})",
-                if selected { "▶" } else { " " },
-                g.name,
-                g.color
-            );
-            let style = if selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            items.push(ListItem::new(label).style(style));
-        }
-    }
-    items.push(ListItem::new(Line::from(Span::styled(
-        "  ↑↓:navegar  g:nuevo  e:editar  d:eliminar",
-        Style::default().fg(Color::DarkGray),
-    ))));
-
-    frame.render_widget(List::new(items), inner);
-}
-
 fn render_tareas(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let block = panel_block("Tareas");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let tasks = state
-        .storage
-        .list_tasks(TaskFilter {
-            status: Some(storage::TaskStatus::Pendiente),
-            ..Default::default()
-        })
-        .unwrap_or_default();
+    let groups = state.storage.list_groups().unwrap_or_default();
+    let groups_height = (groups.len() + 3).min(8) as u16;
 
-    let mut items: Vec<ListItem> = tasks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let label = format!(
-                " {} [{}] {} ({})",
-                if i == state.task_cursor { "▶" } else { " " },
-                t.priority.as_str(),
-                t.title,
-                t.deadline.as_deref().unwrap_or("sin fecha")
-            );
-            let style = if i == state.task_cursor {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(groups_height)])
+        .split(inner);
+
+    // --- Tasks section ---
+    let tasks = get_filtered_tasks(state);
+    let mut task_items: Vec<ListItem> = Vec::new();
+
+    if !state.tareas_filter.is_default() {
+        let status_label = match state.tareas_filter.status {
+            Some(TaskStatus::Pendiente) => "pendiente",
+            Some(TaskStatus::Completada) => "completada",
+            Some(TaskStatus::Cancelada) => "cancelada",
+            None => "todas",
+        };
+        let priority_label = match state.tareas_filter.priority {
+            Some(Priority::Alta) => "alta",
+            Some(Priority::Media) => "media",
+            Some(Priority::Baja) => "baja",
+            None => "todas",
+        };
+        let group_label = match &state.tareas_filter.group_id {
+            None => "todos".to_string(),
+            Some(None) => "sin grupo".to_string(),
+            Some(Some(gid)) => groups
+                .iter()
+                .find(|g| g.id == *gid)
+                .map(|g| g.name.clone())
+                .unwrap_or_else(|| "?".to_string()),
+        };
+        let date_label = match (&state.tareas_filter.from_date, &state.tareas_filter.to_date) {
+            (None, None) => String::new(),
+            (Some(f), Some(t)) if f == t => format!("  fecha:{}", f),
+            (Some(f), Some(t)) => format!("  fecha:{}/{}", f, t),
+            (Some(f), None) => format!("  desde:{}", f),
+            (None, Some(t)) => format!("  hasta:{}", t),
+        };
+        let filter_line = format!(
+            "Filtros: estado:{}  prioridad:{}  grupo:{}{}",
+            status_label, priority_label, group_label, date_label
+        );
+        task_items.push(ListItem::new(Line::from(Span::styled(
+            filter_line,
+            Style::default().fg(Color::Yellow),
+        ))));
+    }
+
+    for (i, t) in tasks.iter().enumerate() {
+        let cursor = if state.tareas_section == TareasSection::Tasks && i == state.task_cursor {
+            "▶"
+        } else {
+            " "
+        };
+
+        let group_indicator = if let Some(gid) = t.group_id {
+            if let Some(g) = groups.iter().find(|g| g.id == gid) {
+                let styled = resolve_style(Some(&g.color), Some(&g.name), state.color_mode);
+                if let Some(prefix) = &styled.prefix {
+                    format!("{} ", prefix)
+                } else {
+                    "██ ".to_string()
+                }
+            } else {
+                "   ".to_string()
+            }
+        } else {
+            "   ".to_string()
+        };
+
+        let deadline_str = t.deadline.as_deref().map(|d| {
+            if let Some(pos) = d.find('T') { &d[..pos] } else { d }
+        }).unwrap_or("sin fecha");
+
+        let label = format!(
+            " {} {}[{}] {} ({})",
+            cursor, group_indicator, t.priority.as_str(), t.title, deadline_str
+        );
+
+        let base_style = if state.tareas_section == TareasSection::Tasks && i == state.task_cursor {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else if let Some(gid) = t.group_id {
+            if let Some(g) = groups.iter().find(|g| g.id == gid) {
+                resolve_style(Some(&g.color), Some(&g.name), state.color_mode).style
             } else {
                 Style::default()
-            };
-            ListItem::new(label).style(style)
-        })
-        .collect();
+            }
+        } else {
+            Style::default()
+        };
+        task_items.push(ListItem::new(label).style(base_style));
+    }
 
-    items.push(ListItem::new(Line::from(Span::styled(
-        "  ↑↓:navegar  n:nueva  e:editar  c:completar  d:eliminar  g:nuevo grupo",
+    if tasks.is_empty() {
+        task_items.push(ListItem::new(Line::from(Span::styled(
+            "  (sin tareas)",
+            Style::default().fg(Color::DarkGray),
+        ))));
+    }
+
+    let task_hint = if state.tareas_section == TareasSection::Tasks {
+        "  ↑↓:nav  n:nueva  e:edit  c:ok  d:del  f:filtro  s:grupos"
+    } else {
+        "  s:tareas"
+    };
+    task_items.push(ListItem::new(Line::from(Span::styled(
+        task_hint,
         Style::default().fg(Color::DarkGray),
     ))));
 
-    frame.render_widget(List::new(items), inner);
+    frame.render_widget(List::new(task_items), sections[0]);
+
+    // --- Groups section ---
+    let mut group_items: Vec<ListItem> = Vec::new();
+    group_items.push(ListItem::new(Line::from(Span::styled(
+        "── Grupos ──",
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    ))));
+
+    if groups.is_empty() {
+        group_items.push(ListItem::new("  (sin grupos)"));
+    } else {
+        for (i, g) in groups.iter().enumerate() {
+            let selected = state.tareas_section == TareasSection::Groups && i == state.group_cursor;
+            let cursor = if selected { "▶" } else { " " };
+            let label = format!(" {} {} ({})", cursor, g.name, g.color);
+            let style = if selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                resolve_style(Some(&g.color), Some(&g.name), state.color_mode).style
+            };
+            group_items.push(ListItem::new(label).style(style));
+        }
+    }
+
+    let group_hint = if state.tareas_section == TareasSection::Groups {
+        "  ↑↓:nav g:nuevo e:edit d:del s:tareas"
+    } else {
+        "  s:grupos"
+    };
+    group_items.push(ListItem::new(Line::from(Span::styled(
+        group_hint,
+        Style::default().fg(Color::DarkGray),
+    ))));
+
+    frame.render_widget(List::new(group_items), sections[1]);
 }
 
-fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
     let block = panel_block("Calendario");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1915,26 +2713,90 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
     let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
     let events = state.storage.list_events(None, None).unwrap_or_default();
     let view = jinx::calendario::calendar_layout(&tasks, &events);
+    let flat = flat_entries(&view);
 
-    let mut dates: Vec<String> = view.keys().cloned().collect();
-    dates.sort();
-
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let groups = state.storage.list_groups().unwrap_or_default();
     let mut lines: Vec<ListItem> = vec![];
-    for date in &dates {
-        lines.push(ListItem::new(date.as_str()).style(Style::default().add_modifier(Modifier::BOLD)));
-        if let Some(entries) = view.get(date) {
-            for entry in entries {
-                lines.push(ListItem::new(format!("  {}", entry.text)));
+    let mut entry_idx = 0usize;
+    let mut today_line_idx: Option<usize> = None;
+    let mut cursor_line_idx: usize = 0;
+
+    for item in &flat {
+        match item {
+            FlatCalEntry::DateHeader(date) => {
+                if date == &today {
+                    today_line_idx = Some(lines.len());
+                    let label = format!("* {} (hoy)", date);
+                    lines.push(
+                        ListItem::new(label)
+                            .style(Style::default().fg(Color::Rgb(255, 20, 147)).add_modifier(Modifier::BOLD)),
+                    );
+                } else {
+                    lines.push(
+                        ListItem::new(date.as_str())
+                            .style(Style::default().add_modifier(Modifier::BOLD)),
+                    );
+                }
+            }
+            FlatCalEntry::Entry(entry) => {
+                let selected = entry_idx == state.calendar_cursor;
+                if selected {
+                    cursor_line_idx = lines.len();
+                }
+                let cursor = if selected { "▶" } else { " " };
+
+                let entry_style = if selected {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else if let Some(gid) = entry.group_id {
+                    if let Some(g) = groups.iter().find(|g| g.id == gid) {
+                        resolve_style(Some(&g.color), Some(&g.name), state.color_mode).style
+                    } else {
+                        Style::default()
+                    }
+                } else {
+                    Style::default()
+                };
+
+                let label = format!("  {} {}", cursor, entry.text);
+                lines.push(ListItem::new(label).style(entry_style));
+                entry_idx += 1;
             }
         }
     }
 
+    if flat.is_empty() {
+        lines.push(ListItem::new(Line::from(Span::styled(
+            "  (sin eventos ni tareas con fecha)",
+            Style::default().fg(Color::DarkGray),
+        ))));
+    }
+
     lines.push(ListItem::new(Line::from(Span::styled(
-        "  n:nuevo  e:editar  d:eliminar",
+        "  ↑↓:navegar  n:nuevo  e:editar  c:completar  d:eliminar",
         Style::default().fg(Color::DarkGray),
     ))));
 
-    frame.render_widget(List::new(lines), inner);
+    let visible_height = inner.height as usize;
+
+    if !state.calendar_scroll_initialized && today_line_idx.is_some() {
+        state.calendar_scroll = today_line_idx.unwrap_or(0);
+        state.calendar_scroll_initialized = true;
+    }
+
+    if !lines.is_empty() && visible_height > 0 {
+        if cursor_line_idx < state.calendar_scroll {
+            state.calendar_scroll = cursor_line_idx;
+        } else if cursor_line_idx >= state.calendar_scroll + visible_height {
+            state.calendar_scroll = cursor_line_idx - visible_height + 1;
+        }
+        let max_scroll = lines.len().saturating_sub(visible_height);
+        state.calendar_scroll = state.calendar_scroll.min(max_scroll);
+    }
+
+    let end = (state.calendar_scroll + visible_height).min(lines.len());
+    let visible_lines: Vec<ListItem> = lines.drain(state.calendar_scroll..end).collect();
+    frame.render_widget(List::new(visible_lines), inner);
 }
 
 fn spinner_state(pending: &Option<(Uuid, Instant)>) -> Option<(char, u64)> {
