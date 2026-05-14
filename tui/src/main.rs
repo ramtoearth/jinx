@@ -189,12 +189,29 @@ struct SettingsFormState {
     host_input: String,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct FilterFormState {
     status_idx: usize,    // 0=pendiente, 1=todas, 2=completada, 3=cancelada
     priority_idx: usize,  // 0=todas, 1=alta, 2=media, 3=baja
     group_idx: usize,     // 0=todos, 1..N=grupo, N+1=sin grupo
-    field: usize,         // 0=status, 1=priority, 2=group
+    date_idx: usize,      // 0=todas, 1=hoy, 2=esta semana, 3=este mes, 4=custom
+    date_from: DateTimeInput,
+    date_to: DateTimeInput,
+    field: usize,         // 0=status, 1=priority, 2=group, 3=fecha, 4=desde, 5=hasta
+}
+
+impl Default for FilterFormState {
+    fn default() -> Self {
+        Self {
+            status_idx: 0,
+            priority_idx: 0,
+            group_idx: 0,
+            date_idx: 0,
+            date_from: DateTimeInput::date_only_disabled(),
+            date_to: DateTimeInput::date_only_disabled(),
+            field: 0,
+        }
+    }
 }
 
 impl GroupFormState {
@@ -577,6 +594,8 @@ struct ActiveTaskFilter {
     status: Option<TaskStatus>,
     group_id: Option<Option<i64>>,
     priority: Option<Priority>,
+    from_date: Option<String>,
+    to_date: Option<String>,
 }
 
 impl Default for ActiveTaskFilter {
@@ -585,6 +604,8 @@ impl Default for ActiveTaskFilter {
             status: Some(TaskStatus::Pendiente),
             group_id: None,
             priority: None,
+            from_date: None,
+            to_date: None,
         }
     }
 }
@@ -594,7 +615,8 @@ impl ActiveTaskFilter {
         TaskFilter {
             status: self.status,
             group_id: self.group_id,
-            ..Default::default()
+            from_date: self.from_date.clone(),
+            to_date: self.to_date.clone(),
         }
     }
 
@@ -602,6 +624,8 @@ impl ActiveTaskFilter {
         self.status == Some(TaskStatus::Pendiente)
             && self.group_id.is_none()
             && self.priority.is_none()
+            && self.from_date.is_none()
+            && self.to_date.is_none()
     }
 }
 
@@ -1231,6 +1255,25 @@ fn open_edit_group_modal(state: &mut RuntimeState, id: i64) {
 
 fn open_filter_modal(state: &mut RuntimeState) {
     refresh_groups_cache(state);
+    let (date_idx, date_from, date_to) = match (&state.tareas_filter.from_date, &state.tareas_filter.to_date) {
+        (None, None) => (0, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled()),
+        (Some(f), Some(t)) => {
+            let today = today_str();
+            let (wk_m, wk_s) = week_bounds();
+            let (mo_f, mo_l) = month_bounds();
+            if f == &today && t == &today {
+                (1, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+            } else if f == &wk_m && t == &wk_s {
+                (2, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+            } else if f == &mo_f && t == &mo_l {
+                (3, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+            } else {
+                (4, DateTimeInput::from_iso(f, false), DateTimeInput::from_iso(t, false))
+            }
+        }
+        (Some(f), None) => (4, DateTimeInput::from_iso(f, false), DateTimeInput::date_only_disabled()),
+        (None, Some(t)) => (4, DateTimeInput::date_only_disabled(), DateTimeInput::from_iso(t, false)),
+    };
     state.filter_form = FilterFormState {
         status_idx: match state.tareas_filter.status {
             Some(TaskStatus::Pendiente) => 0,
@@ -1251,6 +1294,9 @@ fn open_filter_modal(state: &mut RuntimeState) {
             }
             Some(None) => state.groups_cache.len() + 1,
         },
+        date_idx,
+        date_from,
+        date_to,
         field: 0,
     };
     state.app.modal = Some(Modal::FilterTasks);
@@ -1258,20 +1304,45 @@ fn open_filter_modal(state: &mut RuntimeState) {
 
 fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let n_groups = state.groups_cache.len();
+    let is_custom = state.filter_form.date_idx == 4;
+    let n_fields: usize = if is_custom { 6 } else { 4 };
+
+    if state.filter_form.field == 4 && is_custom {
+        match state.filter_form.date_from.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => {
+                state.filter_form.field = 5;
+                return;
+            }
+        }
+    }
+    if state.filter_form.field == 5 && is_custom {
+        match state.filter_form.date_to.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => {
+                state.filter_form.field = 0;
+                return;
+            }
+        }
+    }
+
     match key.code {
         KeyCode::Tab => {
-            state.filter_form.field = (state.filter_form.field + 1) % 3;
+            let next = (state.filter_form.field + 1) % n_fields;
+            state.filter_form.field = if !is_custom && next > 3 { 0 } else { next };
         }
         KeyCode::BackTab => {
-            state.filter_form.field = (state.filter_form.field + 2) % 3;
+            let prev = if state.filter_form.field == 0 { n_fields - 1 } else { state.filter_form.field - 1 };
+            state.filter_form.field = if !is_custom && prev > 3 { 3 } else { prev };
         }
         KeyCode::Left => match state.filter_form.field {
             0 => state.filter_form.status_idx = (state.filter_form.status_idx + 3) % 4,
             1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 3) % 4,
             2 => {
-                let n = n_groups + 2; // todos + N groups + sin grupo
+                let n = n_groups + 2;
                 state.filter_form.group_idx = (state.filter_form.group_idx + n - 1) % n;
             }
+            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 4) % 5,
             _ => {}
         },
         KeyCode::Right => match state.filter_form.field {
@@ -1281,6 +1352,7 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
                 let n = n_groups + 2;
                 state.filter_form.group_idx = (state.filter_form.group_idx + 1) % n;
             }
+            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 1) % 5,
             _ => {}
         },
         KeyCode::Char('r') => {
@@ -1294,6 +1366,37 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
         }
         _ => {}
     }
+
+    if state.filter_form.date_idx == 4 {
+        state.filter_form.date_from.enabled = true;
+        state.filter_form.date_to.enabled = true;
+    }
+}
+
+fn today_str() -> String {
+    chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
+fn week_bounds() -> (String, String) {
+    let now = chrono::Utc::now();
+    let weekday = now.format("%u").to_string().parse::<i64>().unwrap_or(1);
+    let monday = now - chrono::Duration::days(weekday - 1);
+    let sunday = monday + chrono::Duration::days(6);
+    (
+        monday.format("%Y-%m-%d").to_string(),
+        sunday.format("%Y-%m-%d").to_string(),
+    )
+}
+
+fn month_bounds() -> (String, String) {
+    let now = chrono::Utc::now();
+    let year: u32 = now.format("%Y").to_string().parse().unwrap_or(2026);
+    let month: u32 = now.format("%m").to_string().parse().unwrap_or(1);
+    let last_day = jinx::proximos::days_in_month(year, month);
+    (
+        format!("{:04}-{:02}-01", year, month),
+        format!("{:04}-{:02}-{:02}", year, month, last_day),
+    )
 }
 
 fn apply_filter(state: &mut RuntimeState) {
@@ -1318,6 +1421,16 @@ fn apply_filter(state: &mut RuntimeState) {
         i if i <= n_groups => Some(Some(state.groups_cache[i - 1].id)),
         _ => Some(None),
     };
+    let (from_date, to_date) = match form.date_idx {
+        0 => (None, None),
+        1 => { let t = today_str(); (Some(t.clone()), Some(t)) }
+        2 => { let (m, s) = week_bounds(); (Some(m), Some(s)) }
+        3 => { let (f, l) = month_bounds(); (Some(f), Some(l)) }
+        4 => (form.date_from.to_date_string(), form.date_to.to_date_string()),
+        _ => (None, None),
+    };
+    state.tareas_filter.from_date = from_date;
+    state.tareas_filter.to_date = to_date;
     state.task_cursor = 0;
     state.app.modal = None;
 }
@@ -2039,6 +2152,8 @@ fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Re
         _ => "sin grupo".to_string(),
     };
 
+    let date_labels = ["todas", "hoy", "esta semana", "este mes", "custom"];
+
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
     lines.push(form_line(
         "Estado",
@@ -2055,6 +2170,15 @@ fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Re
         format!("← {} →", group_label),
         form.field == 2,
     ));
+    lines.push(form_line(
+        "Fecha",
+        format!("← {} →", date_labels[form.date_idx]),
+        form.field == 3,
+    ));
+    if form.date_idx == 4 {
+        lines.push(date_input_line("  Desde", &form.date_from, form.field == 4));
+        lines.push(date_input_line("  Hasta", &form.date_to, form.field == 5));
+    }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Tab:campo  ←/→:opción  Enter:aplicar  Esc:cancelar  r:resetear",
@@ -2464,9 +2588,16 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
                 .map(|g| g.name.clone())
                 .unwrap_or_else(|| "?".to_string()),
         };
+        let date_label = match (&state.tareas_filter.from_date, &state.tareas_filter.to_date) {
+            (None, None) => String::new(),
+            (Some(f), Some(t)) if f == t => format!("  fecha:{}", f),
+            (Some(f), Some(t)) => format!("  fecha:{}/{}", f, t),
+            (Some(f), None) => format!("  desde:{}", f),
+            (None, Some(t)) => format!("  hasta:{}", t),
+        };
         let filter_line = format!(
-            "Filtros: estado:{}  prioridad:{}  grupo:{}",
-            status_label, priority_label, group_label
+            "Filtros: estado:{}  prioridad:{}  grupo:{}{}",
+            status_label, priority_label, group_label, date_label
         );
         task_items.push(ListItem::new(Line::from(Span::styled(
             filter_line,
