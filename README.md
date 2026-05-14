@@ -1,6 +1,6 @@
 # jinx
 
-Organizador de día en terminal. Gestiona tareas, eventos y grupos usando lenguaje natural. El agente de IA corre localmente con [Ollama](https://ollama.com) — tus datos no salen de tu máquina.
+Jinx es un organizador de día en terminal. Gestiona tareas y eventos que tengas en tu día día usando lenguaje natural.
 
 ![Demo](assets/demoCLItasks.gif)
 
