@@ -78,6 +78,46 @@ pub fn calendar_layout(tasks: &[Task], events: &[Event]) -> CalendarView {
     view
 }
 
+// ---------------------------------------------------------------------------
+// Flat entry helpers for interactive calendar navigation
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlatCalEntry {
+    DateHeader(String),
+    Entry(CalendarEntry),
+}
+
+pub fn flat_entries(view: &CalendarView) -> Vec<FlatCalEntry> {
+    let mut dates: Vec<&String> = view.keys().collect();
+    dates.sort();
+    let mut flat = vec![];
+    for date in dates {
+        flat.push(FlatCalEntry::DateHeader(date.clone()));
+        if let Some(entries) = view.get(date) {
+            for e in entries {
+                flat.push(FlatCalEntry::Entry(e.clone()));
+            }
+        }
+    }
+    flat
+}
+
+pub fn nth_entry(flat: &[FlatCalEntry], n: usize) -> Option<&CalendarEntry> {
+    flat.iter()
+        .filter_map(|f| match f {
+            FlatCalEntry::Entry(e) => Some(e),
+            _ => None,
+        })
+        .nth(n)
+}
+
+pub fn entry_count(flat: &[FlatCalEntry]) -> usize {
+    flat.iter()
+        .filter(|f| matches!(f, FlatCalEntry::Entry(_)))
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -35,12 +35,13 @@ use storage::{
 use uuid::Uuid;
 
 use jinx::app::{AppEvent, AppState, Modal, Panel, MIN_COLS, MIN_ROWS};
+use jinx::calendario::{entry_count, flat_entries, nth_entry, FlatCalEntry};
+use jinx::color::{detect_color_mode, resolve_style, ColorMode};
 use jinx::config::{self as app_config};
 use jinx::ipc::{
     AgentInitAckPayload, AgentInitPayload, AgentReplyPayload, Envelope, Kind, MessageType,
     ModelProvider, UserMessagePayload,
 };
-use jinx::proximos::{add_24h, proximos};
 use jinx::text_editor::TextEditor;
 
 // ---------------------------------------------------------------------------
@@ -160,6 +161,14 @@ struct SettingsFormState {
     host_input: String,
 }
 
+#[derive(Default, Clone)]
+struct FilterFormState {
+    status_idx: usize,    // 0=pendiente, 1=todas, 2=completada, 3=cancelada
+    priority_idx: usize,  // 0=todas, 1=alta, 2=media, 3=baja
+    group_idx: usize,     // 0=todos, 1..N=grupo, N+1=sin grupo
+    field: usize,         // 0=status, 1=priority, 2=group
+}
+
 impl GroupFormState {
     fn effective_color(&self) -> &str {
         if !self.color_custom.is_empty() {
@@ -211,6 +220,50 @@ fn main() -> io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Tareas panel sub-section and filter state
+// ---------------------------------------------------------------------------
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum TareasSection {
+    #[default]
+    Tasks,
+    Groups,
+}
+
+#[derive(Clone)]
+struct ActiveTaskFilter {
+    status: Option<TaskStatus>,
+    group_id: Option<Option<i64>>,
+    priority: Option<Priority>,
+}
+
+impl Default for ActiveTaskFilter {
+    fn default() -> Self {
+        Self {
+            status: Some(TaskStatus::Pendiente),
+            group_id: None,
+            priority: None,
+        }
+    }
+}
+
+impl ActiveTaskFilter {
+    fn to_storage_filter(&self) -> TaskFilter {
+        TaskFilter {
+            status: self.status,
+            group_id: self.group_id,
+            ..Default::default()
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        self.status == Some(TaskStatus::Pendiente)
+            && self.group_id.is_none()
+            && self.priority.is_none()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Application state and loop
 // ---------------------------------------------------------------------------
 
@@ -222,6 +275,9 @@ struct RuntimeState {
     task_cursor: usize,
     calendar_cursor: usize,
     group_cursor: usize,
+    tareas_section: TareasSection,
+    tareas_filter: ActiveTaskFilter,
+    color_mode: ColorMode,
     storage: Arc<dyn Storage + Send + Sync>,
     agent_child: Option<Child>,
     agent_stdin: Option<ChildStdin>,
@@ -232,6 +288,7 @@ struct RuntimeState {
     event_form: EventFormState,
     group_form: GroupFormState,
     settings_form: SettingsFormState,
+    filter_form: FilterFormState,
     groups_cache: Vec<Group>,
     delete_confirm_name: String,
     // Layout rects for mouse hit-testing
@@ -257,6 +314,9 @@ fn run_app(
         task_cursor: 0,
         calendar_cursor: 0,
         group_cursor: 0,
+        tareas_section: TareasSection::default(),
+        tareas_filter: ActiveTaskFilter::default(),
+        color_mode: detect_color_mode(),
         storage: storage.clone(),
         agent_child: None,
         agent_stdin: None,
@@ -266,6 +326,7 @@ fn run_app(
         event_form: EventFormState::default(),
         group_form: GroupFormState::default(),
         settings_form: SettingsFormState::default(),
+        filter_form: FilterFormState::default(),
         groups_cache: Vec::new(),
         delete_confirm_name: String::new(),
         panel_area: None,
@@ -373,7 +434,6 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         Panel::Chat => handle_chat_key(state, key),
         Panel::Tareas => handle_tareas_key(state, key),
         Panel::Calendario => handle_calendario_key(state, key),
-        Panel::Proximos => handle_proximos_key(state, key),
     }
 }
 
@@ -481,7 +541,6 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
             match state.app.focused_panel {
                 Panel::Tareas => { if state.task_cursor > 0 { state.task_cursor -= 1; } }
                 Panel::Calendario => { if state.calendar_cursor > 0 { state.calendar_cursor -= 1; } }
-                Panel::Proximos => { if state.group_cursor > 0 { state.group_cursor -= 1; } }
                 _ => { state.chat_scroll = state.chat_scroll.saturating_add(3); }
             }
         }
@@ -500,16 +559,16 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
             }
             match state.app.focused_panel {
                 Panel::Tareas => {
-                    let count = state.storage.list_tasks(TaskFilter { status: Some(TaskStatus::Pendiente), ..Default::default() }).unwrap_or_default().len();
+                    let count = state.storage.list_tasks(state.tareas_filter.to_storage_filter()).unwrap_or_default().len();
                     if state.task_cursor + 1 < count { state.task_cursor += 1; }
                 }
                 Panel::Calendario => {
-                    let count = state.storage.list_events(None, None).unwrap_or_default().len();
+                    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
+                    let events = state.storage.list_events(None, None).unwrap_or_default();
+                    let view = jinx::calendario::calendar_layout(&tasks, &events);
+                    let flat = flat_entries(&view);
+                    let count = entry_count(&flat);
                     if state.calendar_cursor + 1 < count { state.calendar_cursor += 1; }
-                }
-                Panel::Proximos => {
-                    let count = state.storage.list_groups().unwrap_or_default().len();
-                    if state.group_cursor + 1 < count { state.group_cursor += 1; }
                 }
                 _ => { state.chat_scroll = state.chat_scroll.saturating_sub(3); }
             }
@@ -565,10 +624,22 @@ fn handle_modal_paste(state: &mut RuntimeState, data: &str) {
 }
 
 fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
-    let tasks = state
-        .storage
-        .list_tasks(TaskFilter { status: Some(TaskStatus::Pendiente), ..Default::default() })
-        .unwrap_or_default();
+    if key.code == KeyCode::Char('s') {
+        state.tareas_section = match state.tareas_section {
+            TareasSection::Tasks => TareasSection::Groups,
+            TareasSection::Groups => TareasSection::Tasks,
+        };
+        return;
+    }
+
+    match state.tareas_section {
+        TareasSection::Tasks => handle_tareas_tasks_key(state, key),
+        TareasSection::Groups => handle_tareas_groups_key(state, key),
+    }
+}
+
+fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    let tasks = get_filtered_tasks(state);
     match key.code {
         KeyCode::Up if state.task_cursor > 0 => {
             state.task_cursor -= 1;
@@ -584,11 +655,21 @@ fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) 
         }
         KeyCode::Char('c') => {
             if let Some(t) = tasks.get(state.task_cursor) {
-                let id = t.id;
-                match state.storage.complete_task(id) {
+                let new_status = if t.status == TaskStatus::Completada {
+                    TaskStatus::Pendiente
+                } else {
+                    TaskStatus::Completada
+                };
+                match state.storage.update_task(
+                    t.id,
+                    TaskPatch { status: Some(new_status), ..Default::default() },
+                ) {
                     Ok(_) => {
-                        state.app.status_bar = "Tarea completada.".to_string();
-                        if state.task_cursor > 0 { state.task_cursor -= 1; }
+                        state.app.status_bar = if new_status == TaskStatus::Completada {
+                            "Tarea completada.".to_string()
+                        } else {
+                            "Tarea marcada como pendiente.".to_string()
+                        };
                     }
                     Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
                 }
@@ -601,36 +682,20 @@ fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) 
             }
         }
         KeyCode::Char('g') => open_new_group_modal(state),
+        KeyCode::Char('f') => open_filter_modal(state),
         _ => {}
     }
 }
 
-fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
-    let events = state.storage.list_events(None, None).unwrap_or_default();
-    match key.code {
-        KeyCode::Up if state.calendar_cursor > 0 => { state.calendar_cursor -= 1; }
-        KeyCode::Down if state.calendar_cursor + 1 < events.len() => { state.calendar_cursor += 1; }
-        KeyCode::Char('n') => open_new_event_modal(state),
-        KeyCode::Char('e') => {
-            if let Some(ev) = events.get(state.calendar_cursor) {
-                open_edit_event_modal(state, ev.id);
-            }
-        }
-        KeyCode::Char('d') => {
-            if let Some(ev) = events.get(state.calendar_cursor) {
-                state.delete_confirm_name = ev.title.clone();
-                state.app.modal = Some(Modal::DeleteEvent { id: ev.id });
-            }
-        }
-        _ => {}
-    }
-}
-
-fn handle_proximos_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+fn handle_tareas_groups_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let groups = state.storage.list_groups().unwrap_or_default();
     match key.code {
-        KeyCode::Up if state.group_cursor > 0 => { state.group_cursor -= 1; }
-        KeyCode::Down if state.group_cursor + 1 < groups.len() => { state.group_cursor += 1; }
+        KeyCode::Up if state.group_cursor > 0 => {
+            state.group_cursor -= 1;
+        }
+        KeyCode::Down if state.group_cursor + 1 < groups.len() => {
+            state.group_cursor += 1;
+        }
         KeyCode::Char('g') => open_new_group_modal(state),
         KeyCode::Char('e') => {
             if let Some(g) = groups.get(state.group_cursor) {
@@ -646,6 +711,81 @@ fn handle_proximos_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent
         _ => {}
     }
 }
+
+fn get_filtered_tasks(state: &RuntimeState) -> Vec<storage::Task> {
+    let mut tasks = state
+        .storage
+        .list_tasks(state.tareas_filter.to_storage_filter())
+        .unwrap_or_default();
+    if let Some(p) = state.tareas_filter.priority {
+        tasks.retain(|t| t.priority == p);
+    }
+    tasks
+}
+
+fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
+    let events = state.storage.list_events(None, None).unwrap_or_default();
+    let view = jinx::calendario::calendar_layout(&tasks, &events);
+    let flat = flat_entries(&view);
+    let count = entry_count(&flat);
+
+    match key.code {
+        KeyCode::Up if state.calendar_cursor > 0 => {
+            state.calendar_cursor -= 1;
+        }
+        KeyCode::Down if count > 0 && state.calendar_cursor + 1 < count => {
+            state.calendar_cursor += 1;
+        }
+        KeyCode::Char('n') => open_new_event_modal(state),
+        KeyCode::Char('e') => {
+            if let Some(entry) = nth_entry(&flat, state.calendar_cursor) {
+                if entry.is_task {
+                    open_edit_task_modal(state, entry.entity_id);
+                } else {
+                    open_edit_event_modal(state, entry.entity_id);
+                }
+            }
+        }
+        KeyCode::Char('c') => {
+            if let Some(entry) = nth_entry(&flat, state.calendar_cursor) {
+                if entry.is_task {
+                    let task = tasks.iter().find(|t| t.id == entry.entity_id);
+                    let new_status = if task.map(|t| t.status) == Some(TaskStatus::Completada) {
+                        TaskStatus::Pendiente
+                    } else {
+                        TaskStatus::Completada
+                    };
+                    match state.storage.update_task(
+                        entry.entity_id,
+                        TaskPatch { status: Some(new_status), ..Default::default() },
+                    ) {
+                        Ok(_) => {
+                            state.app.status_bar = if new_status == TaskStatus::Completada {
+                                "Tarea completada.".to_string()
+                            } else {
+                                "Tarea marcada como pendiente.".to_string()
+                            };
+                        }
+                        Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
+                    }
+                }
+            }
+        }
+        KeyCode::Char('d') => {
+            if let Some(entry) = nth_entry(&flat, state.calendar_cursor) {
+                state.delete_confirm_name = entry.text.clone();
+                if entry.is_task {
+                    state.app.modal = Some(Modal::DeleteTask { id: entry.entity_id });
+                } else {
+                    state.app.modal = Some(Modal::DeleteEvent { id: entry.entity_id });
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Modal open helpers
@@ -741,6 +881,99 @@ fn open_edit_group_modal(state: &mut RuntimeState, id: i64) {
         };
         state.app.modal = Some(Modal::EditGroup { id });
     }
+}
+
+fn open_filter_modal(state: &mut RuntimeState) {
+    refresh_groups_cache(state);
+    state.filter_form = FilterFormState {
+        status_idx: match state.tareas_filter.status {
+            Some(TaskStatus::Pendiente) => 0,
+            None => 1,
+            Some(TaskStatus::Completada) => 2,
+            Some(TaskStatus::Cancelada) => 3,
+        },
+        priority_idx: match state.tareas_filter.priority {
+            None => 0,
+            Some(Priority::Alta) => 1,
+            Some(Priority::Media) => 2,
+            Some(Priority::Baja) => 3,
+        },
+        group_idx: match state.tareas_filter.group_id {
+            None => 0,
+            Some(Some(gid)) => {
+                state.groups_cache.iter().position(|g| g.id == gid).map(|i| i + 1).unwrap_or(0)
+            }
+            Some(None) => state.groups_cache.len() + 1,
+        },
+        field: 0,
+    };
+    state.app.modal = Some(Modal::FilterTasks);
+}
+
+fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    let n_groups = state.groups_cache.len();
+    match key.code {
+        KeyCode::Tab => {
+            state.filter_form.field = (state.filter_form.field + 1) % 3;
+        }
+        KeyCode::BackTab => {
+            state.filter_form.field = (state.filter_form.field + 2) % 3;
+        }
+        KeyCode::Left => match state.filter_form.field {
+            0 => state.filter_form.status_idx = (state.filter_form.status_idx + 3) % 4,
+            1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 3) % 4,
+            2 => {
+                let n = n_groups + 2; // todos + N groups + sin grupo
+                state.filter_form.group_idx = (state.filter_form.group_idx + n - 1) % n;
+            }
+            _ => {}
+        },
+        KeyCode::Right => match state.filter_form.field {
+            0 => state.filter_form.status_idx = (state.filter_form.status_idx + 1) % 4,
+            1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 1) % 4,
+            2 => {
+                let n = n_groups + 2;
+                state.filter_form.group_idx = (state.filter_form.group_idx + 1) % n;
+            }
+            _ => {}
+        },
+        KeyCode::Char('r') => {
+            state.filter_form = FilterFormState::default();
+        }
+        KeyCode::Enter => {
+            apply_filter(state);
+        }
+        KeyCode::Esc => {
+            state.app.modal = None;
+        }
+        _ => {}
+    }
+}
+
+fn apply_filter(state: &mut RuntimeState) {
+    let form = &state.filter_form;
+    state.tareas_filter.status = match form.status_idx {
+        0 => Some(TaskStatus::Pendiente),
+        1 => None,
+        2 => Some(TaskStatus::Completada),
+        3 => Some(TaskStatus::Cancelada),
+        _ => Some(TaskStatus::Pendiente),
+    };
+    state.tareas_filter.priority = match form.priority_idx {
+        0 => None,
+        1 => Some(Priority::Alta),
+        2 => Some(Priority::Media),
+        3 => Some(Priority::Baja),
+        _ => None,
+    };
+    let n_groups = state.groups_cache.len();
+    state.tareas_filter.group_id = match form.group_idx {
+        0 => None,
+        i if i <= n_groups => Some(Some(state.groups_cache[i - 1].id)),
+        _ => Some(None),
+    };
+    state.task_cursor = 0;
+    state.app.modal = None;
 }
 
 fn open_settings_modal(state: &mut RuntimeState) {
@@ -867,6 +1100,7 @@ fn handle_modal_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
             }
         }),
         Some(Modal::Settings) => handle_settings_form_key(state, key),
+        Some(Modal::FilterTasks) => handle_filter_form_key(state, key),
         _ => { if key.code == KeyCode::Esc { state.app.modal = None; } }
     }
 }
@@ -1346,7 +1580,6 @@ fn render(frame: &mut ratatui::Frame, state: &mut RuntimeState) {
         Panel::Chat => render_chat(frame, state, chunks[1]),
         Panel::Tareas => render_tareas(frame, state, chunks[1]),
         Panel::Calendario => render_calendario(frame, state, chunks[1]),
-        Panel::Proximos => render_proximos(frame, state, chunks[1]),
     }
 
     render_status(frame, state, chunks[2]);
@@ -1362,9 +1595,8 @@ fn render_tabs(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         Panel::Chat => 0,
         Panel::Tareas => 1,
         Panel::Calendario => 2,
-        Panel::Proximos => 3,
     };
-    let tabs = Tabs::new(vec!["  Chat  ", "  Tareas  ", "  Calendario  ", "  Próximos  "])
+    let tabs = Tabs::new(vec!["  Chat  ", "  Tareas  ", "  Calendario  "])
         .select(active)
         .block(Block::default().borders(Borders::ALL))
         .style(Style::default().fg(Color::DarkGray))
@@ -1417,6 +1649,7 @@ fn render_modal(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
             render_delete_confirm(frame, state, popup);
         }
         Some(Modal::Settings) => render_settings_form(frame, state, popup),
+        Some(Modal::FilterTasks) => render_filter_form(frame, state, popup),
         _ => {}
     }
 }
@@ -1432,6 +1665,49 @@ fn form_line<'a>(label: &'a str, value: String, active: bool) -> Line<'a> {
         Span::styled(format!("  {:16}", label), ls),
         Span::styled(value, vs),
     ])
+}
+
+fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    let form = &state.filter_form;
+    let block = Block::default()
+        .title("Filtrar Tareas")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let status_labels = ["pendiente", "todas", "completada", "cancelada"];
+    let priority_labels = ["todas", "alta", "media", "baja"];
+
+    let group_label = match form.group_idx {
+        0 => "todos".to_string(),
+        i if i <= state.groups_cache.len() => state.groups_cache[i - 1].name.clone(),
+        _ => "sin grupo".to_string(),
+    };
+
+    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+    lines.push(form_line(
+        "Estado",
+        format!("← {} →", status_labels[form.status_idx]),
+        form.field == 0,
+    ));
+    lines.push(form_line(
+        "Prioridad",
+        format!("← {} →", priority_labels[form.priority_idx]),
+        form.field == 1,
+    ));
+    lines.push(form_line(
+        "Grupo",
+        format!("← {} →", group_label),
+        form.field == 2,
+    ));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Tab:campo  ←/→:opción  Enter:aplicar  Esc:cancelar  r:resetear",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_task_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
@@ -1800,111 +2076,153 @@ fn calculate_cursor_position(editor: &TextEditor, area: Rect) -> (u16, u16) {
     (x, y)
 }
 
-fn render_proximos(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let block = panel_block("Próximos");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
-    let events = state.storage.list_events(None, None).unwrap_or_default();
-
-    let now = chrono::Utc::now();
-    let now_date = now.format("%Y-%m-%d").to_string();
-    let now_time = now.format("%H:%M").to_string();
-    let (end_date, end_time) = add_24h(&now_date, &now_time);
-
-    let entries = proximos(&tasks, &events, &now_date, &now_time, &end_date, &end_time);
-
-    let mut items: Vec<ListItem> = entries
-        .iter()
-        .map(|e| {
-            let label = match e.kind {
-                jinx::proximos::EntryKind::Task { priority } => {
-                    format!("▸ {} ({}) [{} {}]", e.title, priority.as_str(), e.date, e.time)
-                }
-                jinx::proximos::EntryKind::Event => {
-                    format!("● {} [{} {}]", e.title, e.date, e.time)
-                }
-            };
-            ListItem::new(label)
-        })
-        .collect();
-
-    // Groups section at the bottom
-    let groups = state.storage.list_groups().unwrap_or_default();
-    if !items.is_empty() {
-        items.push(ListItem::new(Line::from("")));
-    }
-    items.push(ListItem::new(Line::from(Span::styled(
-        "── Grupos ──",
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-    ))));
-    if groups.is_empty() {
-        items.push(ListItem::new("  (sin grupos)"));
-    } else {
-        for (i, g) in groups.iter().enumerate() {
-            let selected = i == state.group_cursor;
-            let label = format!(
-                " {} {} ({})",
-                if selected { "▶" } else { " " },
-                g.name,
-                g.color
-            );
-            let style = if selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            items.push(ListItem::new(label).style(style));
-        }
-    }
-    items.push(ListItem::new(Line::from(Span::styled(
-        "  ↑↓:navegar  g:nuevo  e:editar  d:eliminar",
-        Style::default().fg(Color::DarkGray),
-    ))));
-
-    frame.render_widget(List::new(items), inner);
-}
-
 fn render_tareas(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let block = panel_block("Tareas");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let tasks = state
-        .storage
-        .list_tasks(TaskFilter {
-            status: Some(storage::TaskStatus::Pendiente),
-            ..Default::default()
-        })
-        .unwrap_or_default();
+    let groups = state.storage.list_groups().unwrap_or_default();
+    let groups_height = (groups.len() + 3).min(8) as u16;
 
-    let mut items: Vec<ListItem> = tasks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let label = format!(
-                " {} [{}] {} ({})",
-                if i == state.task_cursor { "▶" } else { " " },
-                t.priority.as_str(),
-                t.title,
-                t.deadline.as_deref().unwrap_or("sin fecha")
-            );
-            let style = if i == state.task_cursor {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(groups_height)])
+        .split(inner);
+
+    // --- Tasks section ---
+    let tasks = get_filtered_tasks(state);
+    let mut task_items: Vec<ListItem> = Vec::new();
+
+    if !state.tareas_filter.is_default() {
+        let status_label = match state.tareas_filter.status {
+            Some(TaskStatus::Pendiente) => "pendiente",
+            Some(TaskStatus::Completada) => "completada",
+            Some(TaskStatus::Cancelada) => "cancelada",
+            None => "todas",
+        };
+        let priority_label = match state.tareas_filter.priority {
+            Some(Priority::Alta) => "alta",
+            Some(Priority::Media) => "media",
+            Some(Priority::Baja) => "baja",
+            None => "todas",
+        };
+        let group_label = match &state.tareas_filter.group_id {
+            None => "todos".to_string(),
+            Some(None) => "sin grupo".to_string(),
+            Some(Some(gid)) => groups
+                .iter()
+                .find(|g| g.id == *gid)
+                .map(|g| g.name.clone())
+                .unwrap_or_else(|| "?".to_string()),
+        };
+        let filter_line = format!(
+            "Filtros: estado:{}  prioridad:{}  grupo:{}",
+            status_label, priority_label, group_label
+        );
+        task_items.push(ListItem::new(Line::from(Span::styled(
+            filter_line,
+            Style::default().fg(Color::Yellow),
+        ))));
+    }
+
+    for (i, t) in tasks.iter().enumerate() {
+        let cursor = if state.tareas_section == TareasSection::Tasks && i == state.task_cursor {
+            "▶"
+        } else {
+            " "
+        };
+
+        let group_indicator = if let Some(gid) = t.group_id {
+            if let Some(g) = groups.iter().find(|g| g.id == gid) {
+                let styled = resolve_style(Some(&g.color), Some(&g.name), state.color_mode);
+                if let Some(prefix) = &styled.prefix {
+                    format!("{} ", prefix)
+                } else {
+                    "██ ".to_string()
+                }
+            } else {
+                "   ".to_string()
+            }
+        } else {
+            "   ".to_string()
+        };
+
+        let deadline_str = t.deadline.as_deref().map(|d| {
+            if let Some(pos) = d.find('T') { &d[..pos] } else { d }
+        }).unwrap_or("sin fecha");
+
+        let label = format!(
+            " {} {}[{}] {} ({})",
+            cursor, group_indicator, t.priority.as_str(), t.title, deadline_str
+        );
+
+        let base_style = if state.tareas_section == TareasSection::Tasks && i == state.task_cursor {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else if let Some(gid) = t.group_id {
+            if let Some(g) = groups.iter().find(|g| g.id == gid) {
+                resolve_style(Some(&g.color), Some(&g.name), state.color_mode).style
             } else {
                 Style::default()
-            };
-            ListItem::new(label).style(style)
-        })
-        .collect();
+            }
+        } else {
+            Style::default()
+        };
+        task_items.push(ListItem::new(label).style(base_style));
+    }
 
-    items.push(ListItem::new(Line::from(Span::styled(
-        "  ↑↓:navegar  n:nueva  e:editar  c:completar  d:eliminar  g:nuevo grupo",
+    if tasks.is_empty() {
+        task_items.push(ListItem::new(Line::from(Span::styled(
+            "  (sin tareas)",
+            Style::default().fg(Color::DarkGray),
+        ))));
+    }
+
+    let task_hint = if state.tareas_section == TareasSection::Tasks {
+        "  ↑↓:nav  n:nueva  e:edit  c:ok  d:del  f:filtro  s:grupos"
+    } else {
+        "  s:tareas"
+    };
+    task_items.push(ListItem::new(Line::from(Span::styled(
+        task_hint,
         Style::default().fg(Color::DarkGray),
     ))));
 
-    frame.render_widget(List::new(items), inner);
+    frame.render_widget(List::new(task_items), sections[0]);
+
+    // --- Groups section ---
+    let mut group_items: Vec<ListItem> = Vec::new();
+    group_items.push(ListItem::new(Line::from(Span::styled(
+        "── Grupos ──",
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    ))));
+
+    if groups.is_empty() {
+        group_items.push(ListItem::new("  (sin grupos)"));
+    } else {
+        for (i, g) in groups.iter().enumerate() {
+            let selected = state.tareas_section == TareasSection::Groups && i == state.group_cursor;
+            let cursor = if selected { "▶" } else { " " };
+            let label = format!(" {} {} ({})", cursor, g.name, g.color);
+            let style = if selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                resolve_style(Some(&g.color), Some(&g.name), state.color_mode).style
+            };
+            group_items.push(ListItem::new(label).style(style));
+        }
+    }
+
+    let group_hint = if state.tareas_section == TareasSection::Groups {
+        "  ↑↓:nav g:nuevo e:edit d:del s:tareas"
+    } else {
+        "  s:grupos"
+    };
+    group_items.push(ListItem::new(Line::from(Span::styled(
+        group_hint,
+        Style::default().fg(Color::DarkGray),
+    ))));
+
+    frame.render_widget(List::new(group_items), sections[1]);
 }
 
 fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
@@ -1915,22 +2233,52 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
     let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
     let events = state.storage.list_events(None, None).unwrap_or_default();
     let view = jinx::calendario::calendar_layout(&tasks, &events);
+    let flat = flat_entries(&view);
 
-    let mut dates: Vec<String> = view.keys().cloned().collect();
-    dates.sort();
-
+    let groups = state.storage.list_groups().unwrap_or_default();
     let mut lines: Vec<ListItem> = vec![];
-    for date in &dates {
-        lines.push(ListItem::new(date.as_str()).style(Style::default().add_modifier(Modifier::BOLD)));
-        if let Some(entries) = view.get(date) {
-            for entry in entries {
-                lines.push(ListItem::new(format!("  {}", entry.text)));
+    let mut entry_idx = 0usize;
+
+    for item in &flat {
+        match item {
+            FlatCalEntry::DateHeader(date) => {
+                lines.push(
+                    ListItem::new(date.as_str())
+                        .style(Style::default().add_modifier(Modifier::BOLD)),
+                );
+            }
+            FlatCalEntry::Entry(entry) => {
+                let selected = entry_idx == state.calendar_cursor;
+                let cursor = if selected { "▶" } else { " " };
+
+                let entry_style = if selected {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else if let Some(gid) = entry.group_id {
+                    if let Some(g) = groups.iter().find(|g| g.id == gid) {
+                        resolve_style(Some(&g.color), Some(&g.name), state.color_mode).style
+                    } else {
+                        Style::default()
+                    }
+                } else {
+                    Style::default()
+                };
+
+                let label = format!("  {} {}", cursor, entry.text);
+                lines.push(ListItem::new(label).style(entry_style));
+                entry_idx += 1;
             }
         }
     }
 
+    if flat.is_empty() {
+        lines.push(ListItem::new(Line::from(Span::styled(
+            "  (sin eventos ni tareas con fecha)",
+            Style::default().fg(Color::DarkGray),
+        ))));
+    }
+
     lines.push(ListItem::new(Line::from(Span::styled(
-        "  n:nuevo  e:editar  d:eliminar",
+        "  ↑↓:navegar  n:nuevo  e:editar  c:completar  d:eliminar",
         Style::default().fg(Color::DarkGray),
     ))));
 

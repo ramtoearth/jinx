@@ -15,6 +15,7 @@ pub struct ProximosEntry {
     pub time: String,
     pub kind: EntryKind,
     pub group_id: Option<i64>,
+    pub entity_id: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +68,7 @@ pub fn proximos(
                         time,
                         kind: EntryKind::Task { priority: task.priority },
                         group_id: task.group_id,
+                        entity_id: task.id,
                     });
                 }
             }
@@ -83,6 +85,7 @@ pub fn proximos(
                 time: event.start_time.clone(),
                 kind: EntryKind::Event,
                 group_id: event.group_id,
+                entity_id: event.id,
             });
         }
     }
