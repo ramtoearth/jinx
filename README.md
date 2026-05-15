@@ -9,7 +9,7 @@ Jinx es un organizador de día en terminal. Gestiona tareas y eventos que tengas
 ### macOS y Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ramtoearth/jinx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ramtoearth/jinx/main/scripts/install.sh | bash
 ```
 
 El script descarga el binario precompilado para tu plataforma e instala `uv` si no lo tienes.
@@ -17,7 +17,7 @@ El script descarga el binario precompilado para tu plataforma e instala `uv` si 
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/ramtoearth/jinx/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/ramtoearth/jinx/main/scripts/install.ps1 | iex
 ```
 
 ### Instalación manual

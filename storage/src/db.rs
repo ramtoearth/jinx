@@ -253,8 +253,13 @@ impl Storage for SqliteStorage {
             binds.push(Box::new(from));
         }
         if let Some(to) = filter.to_date {
+            let effective = if to.len() == 10 && !to.contains('T') {
+                format!("{}T23:59:59+23:59", to)
+            } else {
+                to
+            };
             clauses.push("deadline <= ?".to_string());
-            binds.push(Box::new(to));
+            binds.push(Box::new(effective));
         }
 
         let where_clause = if clauses.is_empty() {
