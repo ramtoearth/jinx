@@ -249,7 +249,7 @@ struct DateTimeInput {
 
 impl DateTimeInput {
     fn date_only_disabled() -> Self {
-        let now = chrono::Utc::now();
+        let now = chrono::Local::now();
         Self {
             year: now.format("%Y").to_string().parse().unwrap_or(2026),
             month: now.format("%m").to_string().parse().unwrap_or(1),
@@ -264,7 +264,7 @@ impl DateTimeInput {
     }
 
     fn date_time_now() -> Self {
-        let now = chrono::Utc::now();
+        let now = chrono::Local::now();
         Self {
             year: now.format("%Y").to_string().parse().unwrap_or(2026),
             month: now.format("%m").to_string().parse().unwrap_or(1),
@@ -639,6 +639,9 @@ struct RuntimeState {
     chat_editor: TextEditor,
     chat_scroll: usize, // lines from bottom; 0 = pinned to bottom
     task_cursor: usize,
+    tareas_scroll: usize,
+    tareas_search_active: bool,
+    tareas_search_query: String,
     calendar_cursor: usize,
     calendar_scroll: usize,
     calendar_scroll_initialized: bool,
@@ -680,6 +683,9 @@ fn run_app(
         chat_editor: TextEditor::new(),
         chat_scroll: 0,
         task_cursor: 0,
+        tareas_scroll: 0,
+        tareas_search_active: false,
+        tareas_search_query: String::new(),
         calendar_cursor: 0,
         calendar_scroll: 0,
         calendar_scroll_initialized: false,
@@ -989,6 +995,11 @@ fn handle_modal_paste(state: &mut RuntimeState, data: &str) {
 }
 
 fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    if state.tareas_search_active {
+        handle_tareas_search_key(state, key);
+        return;
+    }
+
     if key.code == KeyCode::Char('s') {
         state.tareas_section = match state.tareas_section {
             TareasSection::Tasks => TareasSection::Groups,
@@ -1004,7 +1015,11 @@ fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) 
 }
 
 fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
-    let tasks = get_filtered_tasks(state);
+    let tasks = if !state.tareas_search_query.is_empty() {
+        get_search_filtered_tasks(state)
+    } else {
+        get_filtered_tasks(state)
+    };
     match key.code {
         KeyCode::Up if state.task_cursor > 0 => {
             state.task_cursor -= 1;
@@ -1048,8 +1063,57 @@ fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyE
         }
         KeyCode::Char('g') => open_new_group_modal(state),
         KeyCode::Char('f') => open_filter_modal(state),
+        KeyCode::Char('/') => {
+            state.tareas_search_active = true;
+            state.tareas_search_query.clear();
+            state.task_cursor = 0;
+            state.tareas_scroll = 0;
+        }
         _ => {}
     }
+}
+
+fn handle_tareas_search_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            state.tareas_search_active = false;
+            state.tareas_search_query.clear();
+            state.task_cursor = 0;
+            state.tareas_scroll = 0;
+        }
+        KeyCode::Enter => {
+            state.tareas_search_active = false;
+        }
+        KeyCode::Backspace => {
+            state.tareas_search_query.pop();
+            state.task_cursor = 0;
+            state.tareas_scroll = 0;
+        }
+        KeyCode::Up if state.task_cursor > 0 => {
+            state.task_cursor -= 1;
+        }
+        KeyCode::Down => {
+            let count = get_search_filtered_tasks(state).len();
+            if state.task_cursor + 1 < count {
+                state.task_cursor += 1;
+            }
+        }
+        KeyCode::Char(c) => {
+            state.tareas_search_query.push(c);
+            state.task_cursor = 0;
+            state.tareas_scroll = 0;
+        }
+        _ => {}
+    }
+}
+
+fn get_search_filtered_tasks(state: &RuntimeState) -> Vec<storage::Task> {
+    let mut tasks = get_filtered_tasks(state);
+    if !state.tareas_search_query.is_empty() {
+        let query = state.tareas_search_query.to_lowercase();
+        tasks.retain(|t| t.title.to_lowercase().contains(&query));
+    }
+    tasks
 }
 
 fn handle_tareas_groups_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
@@ -1374,11 +1438,11 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
 }
 
 fn today_str() -> String {
-    chrono::Utc::now().format("%Y-%m-%d").to_string()
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 fn week_bounds() -> (String, String) {
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now();
     let weekday = now.format("%u").to_string().parse::<i64>().unwrap_or(1);
     let monday = now - chrono::Duration::days(weekday - 1);
     let sunday = monday + chrono::Duration::days(6);
@@ -1389,7 +1453,7 @@ fn week_bounds() -> (String, String) {
 }
 
 fn month_bounds() -> (String, String) {
-    let now = chrono::Utc::now();
+    let now = chrono::Local::now();
     let year: u32 = now.format("%Y").to_string().parse().unwrap_or(2026);
     let month: u32 = now.format("%m").to_string().parse().unwrap_or(1);
     let last_day = jinx::proximos::days_in_month(year, month);
@@ -1432,6 +1496,9 @@ fn apply_filter(state: &mut RuntimeState) {
     state.tareas_filter.from_date = from_date;
     state.tareas_filter.to_date = to_date;
     state.task_cursor = 0;
+    state.tareas_scroll = 0;
+    state.tareas_search_active = false;
+    state.tareas_search_query.clear();
     state.app.modal = None;
 }
 
@@ -1944,8 +2011,22 @@ fn send_shutdown(state: &mut RuntimeState) {
         let _ = stdin.write_all(line.as_bytes());
         let _ = stdin.flush();
     }
+    state.agent_stdin = None;
+
     if let Some(ref mut child) = state.agent_child {
-        let _ = child.wait();
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                Err(_) => break,
+            }
+        }
     }
 }
 
@@ -2549,7 +2630,7 @@ fn calculate_cursor_position(editor: &TextEditor, area: Rect) -> (u16, u16) {
     (x, y)
 }
 
-fn render_tareas(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
     let block = panel_block("Tareas");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -2563,8 +2644,20 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         .split(inner);
 
     // --- Tasks section ---
-    let tasks = get_filtered_tasks(state);
+    let tasks = if !state.tareas_search_query.is_empty() || state.tareas_search_active {
+        get_search_filtered_tasks(state)
+    } else {
+        get_filtered_tasks(state)
+    };
     let mut task_items: Vec<ListItem> = Vec::new();
+
+    if state.tareas_search_active {
+        let search_line = format!(" /{}\u{2502}", state.tareas_search_query);
+        task_items.push(ListItem::new(Line::from(Span::styled(
+            search_line,
+            Style::default().fg(Color::Green),
+        ))));
+    }
 
     if !state.tareas_filter.is_default() {
         let status_label = match state.tareas_filter.status {
@@ -2657,8 +2750,10 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         ))));
     }
 
-    let task_hint = if state.tareas_section == TareasSection::Tasks {
-        "  ↑↓:nav  n:nueva  e:edit  c:ok  d:del  f:filtro  s:grupos"
+    let task_hint = if state.tareas_search_active {
+        "  ↑↓:nav  Enter:aceptar  Esc:cancelar"
+    } else if state.tareas_section == TareasSection::Tasks {
+        "  ↑↓:nav  n:nueva  e:edit  c:ok  d:del  f:filtro  /:buscar  s:grupos"
     } else {
         "  s:tareas"
     };
@@ -2667,7 +2762,26 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         Style::default().fg(Color::DarkGray),
     ))));
 
-    frame.render_widget(List::new(task_items), sections[0]);
+    // Scroll: keep cursor visible within available height
+    let visible_height = sections[0].height as usize;
+    let filter_offset = if !state.tareas_filter.is_default() { 1 } else { 0 };
+    let cursor_line = if state.tareas_section == TareasSection::Tasks {
+        state.task_cursor + filter_offset
+    } else {
+        0
+    };
+    if visible_height > 0 && !task_items.is_empty() {
+        if cursor_line < state.tareas_scroll {
+            state.tareas_scroll = cursor_line;
+        } else if cursor_line >= state.tareas_scroll + visible_height {
+            state.tareas_scroll = cursor_line - visible_height + 1;
+        }
+        let max_scroll = task_items.len().saturating_sub(visible_height);
+        state.tareas_scroll = state.tareas_scroll.min(max_scroll);
+    }
+    let end = (state.tareas_scroll + visible_height).min(task_items.len());
+    let visible_items: Vec<ListItem> = task_items.drain(state.tareas_scroll..end).collect();
+    frame.render_widget(List::new(visible_items), sections[0]);
 
     // --- Groups section ---
     let mut group_items: Vec<ListItem> = Vec::new();
@@ -2715,7 +2829,7 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area:
     let view = jinx::calendario::calendar_layout(&tasks, &events);
     let flat = flat_entries(&view);
 
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let groups = state.storage.list_groups().unwrap_or_default();
     let mut lines: Vec<ListItem> = vec![];
     let mut entry_idx = 0usize;
