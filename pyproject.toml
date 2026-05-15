@@ -42,3 +42,7 @@ target-version = "py311"
 [tool.mypy]
 python_version = "3.11"
 strict = true
+files = ["agent"]
+mypy_path = "agent"
+namespace_packages = true
+explicit_package_bases = true
