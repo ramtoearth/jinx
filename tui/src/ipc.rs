@@ -276,6 +276,8 @@ pub struct AgentReplyPayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentInitPayload {
     pub timezone: String,
+    #[serde(default = "default_language")]
+    pub language: String,
     pub model_provider: ModelProvider,
     /// Ollama model ID (only used when `model_provider = local`).
     pub ollama_model: String,
@@ -284,6 +286,10 @@ pub struct AgentInitPayload {
     /// Amazon Bedrock model ID (only used when `model_provider = remote`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bedrock_model_id: Option<String>,
+}
+
+fn default_language() -> String {
+    "en".to_string()
 }
 
 /// Origin of the language model the Agent is using.

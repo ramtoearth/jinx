@@ -61,6 +61,9 @@ const AGENT_INIT:      &str = include_str!("../../agent/__init__.py");
 const AGENT_IPC:       &str = include_str!("../../agent/ipc.py");
 const AGENT_STORAGE:   &str = include_str!("../../agent/storage_tools.py");
 const AGENT_MAIN:      &str = include_str!("../../agent/main.py");
+const AGENT_LOCALE:    &str = include_str!("../../agent/locale.py");
+const AGENT_LOCALE_EN: &str = include_str!("../../agent/locales/en.toml");
+const AGENT_LOCALE_ES: &str = include_str!("../../agent/locales/es.toml");
 
 /// Extract the embedded agent files to the OS data directory and return the
 /// project root path (the directory that contains `pyproject.toml`).
@@ -92,6 +95,12 @@ fn extract_agent() -> std::path::PathBuf {
     write_if_changed(&pkg_dir.join("ipc.py"),            AGENT_IPC);
     write_if_changed(&pkg_dir.join("storage_tools.py"),  AGENT_STORAGE);
     write_if_changed(&pkg_dir.join("main.py"),           AGENT_MAIN);
+    write_if_changed(&pkg_dir.join("locale.py"),         AGENT_LOCALE);
+
+    let locale_dir = pkg_dir.join("locales");
+    let _ = std::fs::create_dir_all(&locale_dir);
+    write_if_changed(&locale_dir.join("en.toml"), AGENT_LOCALE_EN);
+    write_if_changed(&locale_dir.join("es.toml"), AGENT_LOCALE_ES);
 
     data_dir
 }
@@ -100,9 +109,16 @@ fn extract_agent() -> std::path::PathBuf {
 // Chat message
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatRole {
+    Agent,
+    System,
+    User,
+}
+
 #[derive(Debug, Clone)]
 struct ChatMsg {
-    role: &'static str,
+    role: ChatRole,
     text: String,
 }
 
@@ -183,7 +199,8 @@ struct GroupFormState {
 
 #[derive(Default, Clone)]
 struct SettingsFormState {
-    field: usize,         // 0=provider, 1=model, 2=host (host only when local)
+    field: usize,         // 0=language, 1=provider, 2=model, 3=host (host only when local)
+    language_idx: usize,  // 0=English, 1=Español
     provider_idx: usize,  // 0=Local, 1=Remote
     model_input: String,
     host_input: String,
@@ -468,7 +485,7 @@ impl DateTimeInput {
     }
 }
 
-fn date_input_line<'a>(label: &'a str, input: &DateTimeInput, field_active: bool) -> Line<'a> {
+fn date_input_line(label: &str, input: &DateTimeInput, field_active: bool, hint_active: &str, hint_inactive: &str, hint_controls: &str) -> Line<'static> {
     let label_style = if field_active {
         Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
     } else {
@@ -480,7 +497,7 @@ fn date_input_line<'a>(label: &'a str, input: &DateTimeInput, field_active: bool
     ];
 
     if !input.enabled {
-        let hint = if field_active { "(Enter para activar, Tab siguiente)" } else { "(sin fecha)" };
+        let hint = if field_active { hint_active } else { hint_inactive };
         spans.push(Span::styled(hint.to_string(), Style::default().fg(Color::DarkGray)));
         return Line::from(spans);
     }
@@ -530,7 +547,7 @@ fn date_input_line<'a>(label: &'a str, input: &DateTimeInput, field_active: bool
 
     if field_active {
         spans.push(Span::styled(
-            "  ←/→:seg ↑↓:±1 Del:quitar".to_string(),
+            format!("  {}", hint_controls),
             Style::default().fg(Color::DarkGray),
         ));
     }
@@ -635,6 +652,7 @@ impl ActiveTaskFilter {
 
 struct RuntimeState {
     app: AppState,
+    locale: jinx::locale::Locale,
     chat_history: Vec<ChatMsg>,
     chat_editor: TextEditor,
     chat_scroll: usize, // lines from bottom; 0 = pinned to bottom
@@ -677,8 +695,12 @@ fn run_app(
         (size.width, size.height)
     };
 
+    let cfg = app_config::load();
+    let locale = jinx::locale::load(&cfg.language);
+
     let mut state = RuntimeState {
         app: AppState::new(size_cols, size_rows),
+        locale,
         chat_history: Vec::new(),
         chat_editor: TextEditor::new(),
         chat_scroll: 0,
@@ -761,8 +783,7 @@ fn run_app(
             // Check timeout
             if let Some((_, started)) = state.pending_request {
                 if started.elapsed() >= timeout_dur {
-                    state.app.status_bar =
-                        "Tiempo de espera agotado. Vuelve a intentarlo.".to_string();
+                    state.app.status_bar = state.locale.errors.timeout.clone();
                     state.pending_request = None;
                 }
             }
@@ -819,10 +840,10 @@ fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
             let text = state.chat_editor.to_string();
             let trimmed = text.trim().to_string();
             if trimmed.is_empty() {
-                state.app.status_bar = "Mensaje vacío, escribe algo para enviar.".to_string();
+                state.app.status_bar = state.locale.errors.empty_message.clone();
                 return;
             }
-            state.chat_history.push(ChatMsg { role: "usuario", text: trimmed.clone() });
+            state.chat_history.push(ChatMsg { role: ChatRole::User, text: trimmed.clone() });
             state.chat_editor.clear();
             state.chat_scroll = 0;
             send_user_message(state, trimmed);
@@ -986,8 +1007,8 @@ fn handle_modal_paste(state: &mut RuntimeState, data: &str) {
             _ => {}
         },
         Some(Modal::Settings) => match state.settings_form.field {
-            1 => state.settings_form.model_input.push_str(&clean),
-            2 => state.settings_form.host_input.push_str(&clean),
+            2 => state.settings_form.model_input.push_str(&clean),
+            3 => state.settings_form.host_input.push_str(&clean),
             _ => {}
         },
         _ => {}
@@ -1046,9 +1067,9 @@ fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyE
                 ) {
                     Ok(_) => {
                         state.app.status_bar = if new_status == TaskStatus::Completada {
-                            "Tarea completada.".to_string()
+                            state.locale.status.task_completed.clone()
                         } else {
-                            "Tarea marcada como pendiente.".to_string()
+                            state.locale.status.task_pending.clone()
                         };
                     }
                     Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
@@ -1191,9 +1212,9 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                     ) {
                         Ok(_) => {
                             state.app.status_bar = if new_status == TaskStatus::Completada {
-                                "Tarea completada.".to_string()
+                                state.locale.status.task_completed.clone()
                             } else {
-                                "Tarea marcada como pendiente.".to_string()
+                                state.locale.status.task_pending.clone()
                             };
                         }
                         Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
@@ -1505,6 +1526,7 @@ fn apply_filter(state: &mut RuntimeState) {
 fn open_settings_modal(state: &mut RuntimeState) {
     let cfg = app_config::load();
     state.settings_form = SettingsFormState {
+        language_idx: if cfg.language == "es" { 1 } else { 0 },
         provider_idx: if cfg.provider == app_config::Provider::Local { 0 } else { 1 },
         model_input: match &cfg.provider {
             app_config::Provider::Local => cfg.local.model.clone(),
@@ -1518,7 +1540,7 @@ fn open_settings_modal(state: &mut RuntimeState) {
 
 fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let is_local = state.settings_form.provider_idx == 0;
-    let n_fields = if is_local { 3 } else { 2 };
+    let n_fields = if is_local { 4 } else { 3 };
     match key.code {
         KeyCode::Tab => {
             state.settings_form.field = (state.settings_form.field + 1) % n_fields;
@@ -1527,20 +1549,22 @@ fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::Key
             state.settings_form.field = (state.settings_form.field + n_fields - 1) % n_fields;
         }
         KeyCode::Left | KeyCode::Right if state.settings_form.field == 0 => {
+            state.settings_form.language_idx = 1 - state.settings_form.language_idx;
+        }
+        KeyCode::Left | KeyCode::Right if state.settings_form.field == 1 => {
             state.settings_form.provider_idx = 1 - state.settings_form.provider_idx;
-            // Clamp field when switching to Remote (only 2 fields)
-            if state.settings_form.provider_idx == 1 && state.settings_form.field >= 2 {
-                state.settings_form.field = 1;
+            if state.settings_form.provider_idx == 1 && state.settings_form.field >= 3 {
+                state.settings_form.field = 2;
             }
         }
         KeyCode::Char(c) => match state.settings_form.field {
-            1 => state.settings_form.model_input.push(c),
-            2 => state.settings_form.host_input.push(c),
+            2 => state.settings_form.model_input.push(c),
+            3 => state.settings_form.host_input.push(c),
             _ => {}
         },
         KeyCode::Backspace => match state.settings_form.field {
-            1 => { state.settings_form.model_input.pop(); }
-            2 => { state.settings_form.host_input.pop(); }
+            2 => { state.settings_form.model_input.pop(); }
+            3 => { state.settings_form.host_input.pop(); }
             _ => {}
         },
         KeyCode::Enter => save_settings(state),
@@ -1552,7 +1576,9 @@ fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::Key
 fn save_settings(state: &mut RuntimeState) {
     let is_local = state.settings_form.provider_idx == 0;
     let defaults = app_config::Config::default();
+    let lang = if state.settings_form.language_idx == 1 { "es" } else { "en" };
     let cfg = app_config::Config {
+        language: lang.to_string(),
         provider: if is_local {
             app_config::Provider::Local
         } else {
@@ -1580,12 +1606,13 @@ fn save_settings(state: &mut RuntimeState) {
         },
     };
     if let Err(e) = app_config::save(&cfg) {
-        state.app.status_bar = format!("Error guardando config: {e}");
+        state.app.status_bar = state.locale.errors.config_save.replace("{error}", &e.to_string());
         return;
     }
+    state.locale = jinx::locale::load(lang);
     state.app.modal = None;
     restart_agent(state);
-    state.app.status_bar = "Configuración guardada. Agente reiniciado.".to_string();
+    state.app.status_bar = state.locale.status.config_saved.clone();
 }
 
 fn restart_agent(state: &mut RuntimeState) {
@@ -1609,19 +1636,19 @@ fn handle_modal_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => handle_group_form_key(state, key),
         Some(Modal::DeleteTask { id }) => handle_delete_key(state, key, |s| {
             match s.storage.delete_task(id) {
-                Ok(_) => { s.app.modal = None; s.app.status_bar = "Tarea eliminada.".to_string(); if s.task_cursor > 0 { s.task_cursor -= 1; } }
+                Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.task_deleted.clone(); if s.task_cursor > 0 { s.task_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
         Some(Modal::DeleteEvent { id }) => handle_delete_key(state, key, |s| {
             match s.storage.delete_event(id) {
-                Ok(_) => { s.app.modal = None; s.app.status_bar = "Evento eliminado.".to_string(); if s.calendar_cursor > 0 { s.calendar_cursor -= 1; } }
+                Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.event_deleted.clone(); if s.calendar_cursor > 0 { s.calendar_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
         Some(Modal::DeleteGroup { id }) => handle_delete_key(state, key, |s| {
             match s.storage.delete_group(id) {
-                Ok(_) => { s.app.modal = None; s.app.status_bar = "Grupo eliminado.".to_string(); if s.group_cursor > 0 { s.group_cursor -= 1; } }
+                Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.group_deleted.clone(); if s.group_cursor > 0 { s.group_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
@@ -1755,7 +1782,7 @@ fn handle_group_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
 fn save_task(state: &mut RuntimeState) {
     let form = state.task_form.clone();
     if form.title.trim().is_empty() {
-        state.task_form.error = Some("El título no puede estar vacío.".to_string());
+        state.task_form.error = Some(state.locale.errors.title_empty.clone());
         return;
     }
     let priorities = [Priority::Alta, Priority::Media, Priority::Baja];
@@ -1787,7 +1814,7 @@ fn save_task(state: &mut RuntimeState) {
         Ok(()) => {
             state.app.modal = None;
             state.task_form = TaskFormState::default();
-            state.app.status_bar = "Tarea guardada.".to_string();
+            state.app.status_bar = state.locale.status.task_saved.clone();
         }
         Err(e) => state.task_form.error = Some(e.message()),
     }
@@ -1796,13 +1823,13 @@ fn save_task(state: &mut RuntimeState) {
 fn save_event(state: &mut RuntimeState) {
     let form = state.event_form.clone();
     if form.title.trim().is_empty() {
-        state.event_form.error = Some("El título no puede estar vacío.".to_string());
+        state.event_form.error = Some(state.locale.errors.title_empty.clone());
         return;
     }
     let start_date = form.datetime.to_date_string().unwrap_or_default();
     let start_time = form.datetime.to_time_string();
     if start_date.is_empty() {
-        state.event_form.error = Some("La fecha de inicio es obligatoria.".to_string());
+        state.event_form.error = Some(state.locale.errors.start_date_required.clone());
         return;
     }
     let duration_minutes: Option<u32> = if form.duration.trim().is_empty() {
@@ -1810,7 +1837,7 @@ fn save_event(state: &mut RuntimeState) {
     } else {
         match form.duration.trim().parse::<u32>() {
             Ok(d) => Some(d),
-            Err(_) => { state.event_form.error = Some("Duración debe ser un número entero.".to_string()); return; }
+            Err(_) => { state.event_form.error = Some(state.locale.errors.duration_integer.clone()); return; }
         }
     };
     let group_id = if form.group_idx == 0 { None } else {
@@ -1839,7 +1866,7 @@ fn save_event(state: &mut RuntimeState) {
         Ok(()) => {
             state.app.modal = None;
             state.event_form = EventFormState::default();
-            state.app.status_bar = "Evento guardado.".to_string();
+            state.app.status_bar = state.locale.status.event_saved.clone();
         }
         Err(e) => state.event_form.error = Some(e.message()),
     }
@@ -1848,13 +1875,13 @@ fn save_event(state: &mut RuntimeState) {
 fn save_group(state: &mut RuntimeState) {
     let form = state.group_form.clone();
     if form.name.trim().is_empty() {
-        state.group_form.error = Some("El nombre no puede estar vacío.".to_string());
+        state.group_form.error = Some(state.locale.errors.name_empty.clone());
         return;
     }
     let color_str = form.effective_color().to_string();
     let color = match HexColor::new(&color_str) {
         Ok(c) => c,
-        Err(_) => { state.group_form.error = Some("Color inválido. Usa formato #RRGGBB.".to_string()); return; }
+        Err(_) => { state.group_form.error = Some(state.locale.errors.color_invalid.clone()); return; }
     };
 
     let result: Result<_, _> = if let Some(id) = form.edit_id {
@@ -1869,7 +1896,7 @@ fn save_group(state: &mut RuntimeState) {
         Ok(()) => {
             state.app.modal = None;
             state.group_form = GroupFormState::default();
-            state.app.status_bar = "Grupo guardado.".to_string();
+            state.app.status_bar = state.locale.status.group_saved.clone();
         }
         Err(e) => state.group_form.error = Some(e.message()),
     }
@@ -1901,8 +1928,8 @@ fn spawn_agent(state: &mut RuntimeState) {
         .stderr(agent_stderr)
         .spawn()
         .unwrap_or_else(|e| {
-            eprintln!("Error al iniciar el agente: {e}");
-            eprintln!("Instala uv: brew install uv  (o https://astral.sh/uv)");
+            eprintln!("{}", state.locale.errors.agent_start.replace("{error}", &e.to_string()));
+            eprintln!("Install uv: brew install uv  (or https://astral.sh/uv)");
             std::process::exit(1);
         });
 
@@ -1968,6 +1995,7 @@ fn spawn_agent(state: &mut RuntimeState) {
         MessageType::AgentInit,
         &AgentInitPayload {
             timezone,
+            language: cfg.language,
             model_provider,
             ollama_model,
             ollama_host,
@@ -1998,7 +2026,7 @@ fn send_user_message(state: &mut RuntimeState, text: String) {
         if stdin.write_all(line.as_bytes()).is_ok() && stdin.flush().is_ok() {
             state.pending_request = Some((req_id, Instant::now()));
         } else {
-            state.app.status_bar = "Error enviando mensaje al Agente.".to_string();
+            state.app.status_bar = state.locale.errors.agent_send.clone();
             state.app.agent_alive = false;
         }
     }
@@ -2041,17 +2069,17 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
         MessageType::AgentInitAck => {
             if let Ok(Some(p)) = env.payload_as::<AgentInitAckPayload>() {
                 if let Some(notice) = p.provider_notice {
-                    state.chat_history.push(ChatMsg { role: "sistema", text: notice });
+                    state.chat_history.push(ChatMsg { role: ChatRole::System, text: notice });
                 }
             }
         }
         MessageType::AgentReply => {
             if let Ok(Some(p)) = env.payload_as::<AgentReplyPayload>() {
-                state.chat_history.push(ChatMsg { role: "agente", text: p.text });
+                state.chat_history.push(ChatMsg { role: ChatRole::Agent, text: p.text });
                 state.chat_scroll = 0; // auto-scroll to bottom on new message
             }
             state.pending_request = None;
-            state.app.status_bar = "Listo.".to_string();
+            state.app.status_bar = state.locale.status.ready.clone();
         }
         mt if is_storage_message_type(mt) => {
             let response = jinx::ipc_handler::handle_storage_request(&env, &state.storage);
@@ -2102,10 +2130,13 @@ fn render(frame: &mut ratatui::Frame, state: &mut RuntimeState) {
 
     // Viewport guard
     if size.width < MIN_COLS || size.height < MIN_ROWS {
-        let msg = Paragraph::new(format!(
-            "Terminal demasiado pequeño. Mínimo: {MIN_COLS}×{MIN_ROWS} (actual: {}×{})",
-            size.width, size.height
-        ))
+        let msg = Paragraph::new(
+            state.locale.errors.terminal_too_small
+                .replace("{min_cols}", &MIN_COLS.to_string())
+                .replace("{min_rows}", &MIN_ROWS.to_string())
+                .replace("{cols}", &size.width.to_string())
+                .replace("{rows}", &size.height.to_string())
+        )
         .style(Style::default().fg(Color::Red));
         frame.render_widget(msg, size);
         return;
@@ -2144,7 +2175,11 @@ fn render_tabs(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         Panel::Tareas => 1,
         Panel::Calendario => 2,
     };
-    let tabs = Tabs::new(vec!["  Chat  ", "  Tareas  ", "  Calendario  "])
+    let tabs = Tabs::new(vec![
+        format!("  {}  ", state.locale.panels.chat),
+        format!("  {}  ", state.locale.panels.tasks),
+        format!("  {}  ", state.locale.panels.calendar),
+    ])
         .select(active)
         .block(Block::default().borders(Borders::ALL))
         .style(Style::default().fg(Color::DarkGray))
@@ -2202,7 +2237,7 @@ fn render_modal(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     }
 }
 
-fn form_line<'a>(label: &'a str, value: String, active: bool) -> Line<'a> {
+fn form_line(label: &str, value: String, active: bool) -> Line<'static> {
     let (ls, vs) = if active {
         (Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
          Style::default().fg(Color::Cyan))
@@ -2218,51 +2253,73 @@ fn form_line<'a>(label: &'a str, value: String, active: bool) -> Line<'a> {
 fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let form = &state.filter_form;
     let block = Block::default()
-        .title("Filtrar Tareas")
+        .title(state.locale.modals.filter_tasks.as_str())
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let status_labels = ["pendiente", "todas", "completada", "cancelada"];
-    let priority_labels = ["todas", "alta", "media", "baja"];
+    let status_labels = [
+        state.locale.filters.pending.as_str(),
+        state.locale.filters.all.as_str(),
+        state.locale.filters.completed.as_str(),
+        state.locale.filters.cancelled.as_str(),
+    ];
+    let priority_labels = [
+        state.locale.filters.all.as_str(),
+        state.locale.filters.high.as_str(),
+        state.locale.filters.medium.as_str(),
+        state.locale.filters.low.as_str(),
+    ];
 
     let group_label = match form.group_idx {
-        0 => "todos".to_string(),
+        0 => state.locale.filters.all_groups.clone(),
         i if i <= state.groups_cache.len() => state.groups_cache[i - 1].name.clone(),
-        _ => "sin grupo".to_string(),
+        _ => state.locale.filters.no_group.clone(),
     };
 
-    let date_labels = ["todas", "hoy", "esta semana", "este mes", "custom"];
+    let date_labels = [
+        state.locale.filters.all.as_str(),
+        state.locale.filters.today.as_str(),
+        state.locale.filters.this_week.as_str(),
+        state.locale.filters.this_month.as_str(),
+        state.locale.filters.custom.as_str(),
+    ];
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
     lines.push(form_line(
-        "Estado",
+        state.locale.form_labels.status.as_str(),
         format!("← {} →", status_labels[form.status_idx]),
         form.field == 0,
     ));
     lines.push(form_line(
-        "Prioridad",
+        state.locale.form_labels.priority.as_str(),
         format!("← {} →", priority_labels[form.priority_idx]),
         form.field == 1,
     ));
     lines.push(form_line(
-        "Grupo",
+        state.locale.form_labels.group.as_str(),
         format!("← {} →", group_label),
         form.field == 2,
     ));
     lines.push(form_line(
-        "Fecha",
+        state.locale.form_labels.date.as_str(),
         format!("← {} →", date_labels[form.date_idx]),
         form.field == 3,
     ));
     if form.date_idx == 4 {
-        lines.push(date_input_line("  Desde", &form.date_from, form.field == 4));
-        lines.push(date_input_line("  Hasta", &form.date_to, form.field == 5));
+        lines.push(date_input_line(
+            state.locale.form_labels.from_date.as_str(), &form.date_from, form.field == 4,
+            &state.locale.hints.date_input_inactive, &state.locale.hints.no_date, &state.locale.hints.date_input_active,
+        ));
+        lines.push(date_input_line(
+            state.locale.form_labels.to_date.as_str(), &form.date_to, form.field == 5,
+            &state.locale.hints.date_input_inactive, &state.locale.hints.no_date, &state.locale.hints.date_input_active,
+        ));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Tab:campo  ←/→:opción  Enter:aplicar  Esc:cancelar  r:resetear",
+        state.locale.hints.filter_form.clone(),
         Style::default().fg(Color::DarkGray),
     )));
 
@@ -2272,36 +2329,47 @@ fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Re
 fn render_task_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let form = &state.task_form;
     let is_edit = form.edit_id.is_some();
-    let title = if is_edit { "Editar Tarea" } else { "Nueva Tarea" };
-    let block = Block::default().title(title).borders(Borders::ALL)
+    let title_str = if is_edit { &state.locale.modals.edit_task } else { &state.locale.modals.new_task };
+    let block = Block::default().title(title_str.as_str()).borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let priorities = ["alta", "media", "baja"];
-    let statuses = ["pendiente", "completada", "cancelada"];
-    let groups: Vec<String> = std::iter::once("(ninguno)".to_string())
+    let priorities = [
+        state.locale.filters.high.as_str(),
+        state.locale.filters.medium.as_str(),
+        state.locale.filters.low.as_str(),
+    ];
+    let statuses = [
+        state.locale.filters.pending.as_str(),
+        state.locale.filters.completed.as_str(),
+        state.locale.filters.cancelled.as_str(),
+    ];
+    let groups: Vec<String> = std::iter::once(state.locale.filters.none.clone())
         .chain(state.groups_cache.iter().map(|g| g.name.clone()))
         .collect();
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
-    lines.push(form_line("Título", form.title.clone(), form.field == 0));
-    lines.push(form_line("Prioridad", format!("← {} →", priorities[form.priority_idx]), form.field == 1));
-    lines.push(date_input_line("Fecha límite", &form.deadline, form.field == 2));
+    lines.push(form_line(state.locale.form_labels.title.as_str(), form.title.clone(), form.field == 0));
+    lines.push(form_line(state.locale.form_labels.priority.as_str(), format!("← {} →", priorities[form.priority_idx]), form.field == 1));
+    lines.push(date_input_line(
+        state.locale.form_labels.deadline.as_str(), &form.deadline, form.field == 2,
+        &state.locale.hints.date_input_inactive, &state.locale.hints.no_date, &state.locale.hints.date_input_active,
+    ));
     lines.push(form_line(
-        "Grupo",
-        format!("← {} →", groups.get(form.group_idx).map(String::as_str).unwrap_or("(ninguno)")),
+        state.locale.form_labels.group.as_str(),
+        format!("← {} →", groups.get(form.group_idx).map(String::as_str).unwrap_or(state.locale.filters.none.as_str())),
         form.field == 3,
     ));
     if is_edit {
-        lines.push(form_line("Estado", format!("← {} →", statuses[form.status_idx]), form.field == 4));
+        lines.push(form_line(state.locale.form_labels.status.as_str(), format!("← {} →", statuses[form.status_idx]), form.field == 4));
     }
     lines.push(Line::from(""));
     if let Some(ref err) = form.error {
         lines.push(Line::from(Span::styled(format!("  ⚠ {err}"), Style::default().fg(Color::Red))));
     }
     lines.push(Line::from(Span::styled(
-        "  Tab:campo  ←/→:opción  Enter:guardar  Esc:cancelar",
+        state.locale.hints.task_form.clone(),
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(Paragraph::new(lines), inner);
@@ -2310,23 +2378,26 @@ fn render_task_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect
 fn render_event_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let form = &state.event_form;
     let is_edit = form.edit_id.is_some();
-    let title = if is_edit { "Editar Evento" } else { "Nuevo Evento" };
-    let block = Block::default().title(title).borders(Borders::ALL)
+    let title_str = if is_edit { &state.locale.modals.edit_event } else { &state.locale.modals.new_event };
+    let block = Block::default().title(title_str.as_str()).borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let groups: Vec<String> = std::iter::once("(ninguno)".to_string())
+    let groups: Vec<String> = std::iter::once(state.locale.filters.none.clone())
         .chain(state.groups_cache.iter().map(|g| g.name.clone()))
         .collect();
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
-    lines.push(form_line("Título", form.title.clone(), form.field == 0));
-    lines.push(date_input_line("Fecha/Hora", &form.datetime, form.field == 1));
-    lines.push(form_line("Duración (min)", if form.duration.is_empty() { "(vacío = sin límite)".into() } else { form.duration.clone() }, form.field == 2));
+    lines.push(form_line(state.locale.form_labels.title.as_str(), form.title.clone(), form.field == 0));
+    lines.push(date_input_line(
+        state.locale.form_labels.datetime.as_str(), &form.datetime, form.field == 1,
+        &state.locale.hints.date_input_inactive, &state.locale.hints.no_date, &state.locale.hints.date_input_active,
+    ));
+    lines.push(form_line(state.locale.form_labels.duration_min.as_str(), if form.duration.is_empty() { state.locale.misc.empty_duration.clone() } else { form.duration.clone() }, form.field == 2));
     lines.push(form_line(
-        "Grupo",
-        format!("← {} →", groups.get(form.group_idx).map(String::as_str).unwrap_or("(ninguno)")),
+        state.locale.form_labels.group.as_str(),
+        format!("← {} →", groups.get(form.group_idx).map(String::as_str).unwrap_or(state.locale.filters.none.as_str())),
         form.field == 3,
     ));
     lines.push(Line::from(""));
@@ -2334,7 +2405,7 @@ fn render_event_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
         lines.push(Line::from(Span::styled(format!("  ⚠ {err}"), Style::default().fg(Color::Red))));
     }
     lines.push(Line::from(Span::styled(
-        "  Tab:campo  ←/→:grupo  Enter:guardar  Esc:cancelar",
+        state.locale.hints.event_form.clone(),
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(Paragraph::new(lines), inner);
@@ -2343,31 +2414,34 @@ fn render_event_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
 fn render_group_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let form = &state.group_form;
     let is_edit = form.edit_id.is_some();
-    let title = if is_edit { "Editar Grupo" } else { "Nuevo Grupo" };
-    let block = Block::default().title(title).borders(Borders::ALL)
+    let title_str = if is_edit { &state.locale.modals.edit_group } else { &state.locale.modals.new_group };
+    let block = Block::default().title(title_str.as_str()).borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let color_display = if form.color_custom.is_empty() {
-        format!("← {} → (preset {}/{})", COLOR_PRESETS[form.color_idx % COLOR_PRESETS.len()], form.color_idx + 1, COLOR_PRESETS.len())
+        state.locale.misc.preset_color
+            .replace("{color}", COLOR_PRESETS[form.color_idx % COLOR_PRESETS.len()])
+            .replace("{idx}", &(form.color_idx + 1).to_string())
+            .replace("{total}", &COLOR_PRESETS.len().to_string())
     } else {
-        format!("{} (personalizado)", form.color_custom)
+        state.locale.misc.custom_color.replace("{color}", &form.color_custom)
     };
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
-    lines.push(form_line("Nombre", form.name.clone(), form.field == 0));
-    lines.push(form_line("Color", color_display, form.field == 1));
+    lines.push(form_line(state.locale.form_labels.name.as_str(), form.name.clone(), form.field == 0));
+    lines.push(form_line(state.locale.form_labels.color.as_str(), color_display, form.field == 1));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  En Color: ←/→ presets  o escribe #RRGGBB  luego Backspace para volver a presets",
+        state.locale.hints.color_hint.clone(),
         Style::default().fg(Color::DarkGray),
     )));
     if let Some(ref err) = form.error {
         lines.push(Line::from(Span::styled(format!("  ⚠ {err}"), Style::default().fg(Color::Red))));
     }
     lines.push(Line::from(Span::styled(
-        "  Tab:campo  Enter:guardar  Esc:cancelar",
+        state.locale.hints.group_form.clone(),
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(Paragraph::new(lines), inner);
@@ -2375,25 +2449,29 @@ fn render_group_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
 
 fn render_delete_confirm(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let kind = match &state.app.modal {
-        Some(Modal::DeleteTask { .. }) => "tarea",
-        Some(Modal::DeleteEvent { .. }) => "evento",
-        Some(Modal::DeleteGroup { .. }) => "grupo",
-        _ => "elemento",
+        Some(Modal::DeleteTask { .. }) => state.locale.misc.task_kind.as_str(),
+        Some(Modal::DeleteEvent { .. }) => state.locale.misc.event_kind.as_str(),
+        Some(Modal::DeleteGroup { .. }) => state.locale.misc.group_kind.as_str(),
+        _ => state.locale.misc.item_kind.as_str(),
     };
-    let block = Block::default().title("Confirmar eliminación").borders(Borders::ALL)
+    let block = Block::default().title(state.locale.modals.confirm_delete.as_str()).borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let confirm_text = state.locale.misc.delete_confirm
+        .replace("{kind}", kind)
+        .replace("{name}", &state.delete_confirm_name);
+
     let lines: Vec<Line<'static>> = vec![
         Line::from(""),
         Line::from(Span::styled(
-            format!("  ¿Eliminar el {} \"{}\"?", kind, state.delete_confirm_name),
+            confirm_text,
             Style::default().fg(Color::Yellow),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "  Presiona  y  para confirmar  o  n / Esc  para cancelar.",
+            state.locale.hints.delete_prompt.clone(),
             Style::default().fg(Color::DarkGray),
         )),
     ];
@@ -2404,29 +2482,31 @@ fn render_settings_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: 
     let form = &state.settings_form;
     let is_local = form.provider_idx == 0;
     let block = Block::default()
-        .title("Configuración")
+        .title(state.locale.modals.settings.as_str())
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let language_label = if form.language_idx == 1 { "← Español →" } else { "← English →" };
     let provider_label = if is_local { "← Local →" } else { "← Remote →" };
-    let model_label = if is_local { "Modelo Ollama" } else { "Modelo Bedrock" };
+    let model_label = if is_local { state.locale.form_labels.ollama_model.as_str() } else { state.locale.form_labels.bedrock_model.as_str() };
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
-    lines.push(form_line("Proveedor", provider_label.to_string(), form.field == 0));
-    lines.push(form_line(model_label, form.model_input.clone(), form.field == 1));
+    lines.push(form_line(state.locale.form_labels.language.as_str(), language_label.to_string(), form.field == 0));
+    lines.push(form_line(state.locale.form_labels.provider.as_str(), provider_label.to_string(), form.field == 1));
+    lines.push(form_line(model_label, form.model_input.clone(), form.field == 2));
     if is_local {
         let host_display = if form.host_input.is_empty() {
             "http://localhost:11434".to_string()
         } else {
             form.host_input.clone()
         };
-        lines.push(form_line("Host Ollama", host_display, form.field == 2));
+        lines.push(form_line(state.locale.form_labels.ollama_host.as_str(), host_display, form.field == 3));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Tab:campo  ←/→:proveedor  Enter:guardar  Esc:cancelar",
+        state.locale.hints.settings_form.clone(),
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(Paragraph::new(lines), inner);
@@ -2471,7 +2551,7 @@ fn word_wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
-    let block = panel_block("Chat");
+    let block = panel_block(state.locale.panels.chat.as_str());
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -2497,12 +2577,10 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
     // Build display lines for all messages
     let mut all_lines: Vec<Line<'static>> = Vec::new();
     for msg in &state.chat_history {
-        let (label, color) = if msg.role == "agente" {
-            ("Agente", Color::Green)
-        } else if msg.role == "sistema" {
-            ("Sistema", Color::Yellow)
-        } else {
-            ("Tú", Color::Cyan)
+        let (label, color): (&str, Color) = match msg.role {
+            ChatRole::Agent => (state.locale.chat.agent.as_str(), Color::Green),
+            ChatRole::System => (state.locale.chat.system.as_str(), Color::Yellow),
+            ChatRole::User => (state.locale.chat.you.as_str(), Color::Cyan),
         };
         let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
         let body_style = Style::default().fg(color);
@@ -2535,7 +2613,9 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
         let dot_count = (elapsed.as_millis() / 500) as usize % 3 + 1;
         let dots = ".".repeat(dot_count);
         let secs = elapsed.as_secs();
-        let indicator = format!("Agente pensando{}  ({}s)", dots, secs);
+        let indicator = state.locale.chat.thinking
+            .replace("{dots}", &dots)
+            .replace("{secs}", &secs.to_string());
         all_lines.push(Line::from(Span::styled(
             indicator,
             Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
@@ -2553,7 +2633,7 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
     // Show scroll indicator if not at bottom
     if scroll_offset > 0 && !visible.is_empty() {
         visible[0] = Line::from(Span::styled(
-            "  ↑ mensajes anteriores ↑",
+            state.locale.chat.older_messages.clone(),
             Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
         ));
     }
@@ -2561,7 +2641,7 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
     frame.render_widget(Paragraph::new(visible), hist_area);
 
     // Input field with cursor
-    let input_block = Block::default().title("Mensaje (Ctrl+J:nueva línea)").borders(Borders::ALL);
+    let input_block = Block::default().title(state.locale.chat.input_title.as_str()).borders(Borders::ALL);
     let input_inner = input_block.inner(parts[1]);
     state.input_area = Some(input_inner);
     frame.render_widget(input_block, parts[1]);
@@ -2631,7 +2711,7 @@ fn calculate_cursor_position(editor: &TextEditor, area: Rect) -> (u16, u16) {
 }
 
 fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
-    let block = panel_block("Tareas");
+    let block = panel_block(state.locale.panels.tasks.as_str());
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -2661,20 +2741,20 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
 
     if !state.tareas_filter.is_default() {
         let status_label = match state.tareas_filter.status {
-            Some(TaskStatus::Pendiente) => "pendiente",
-            Some(TaskStatus::Completada) => "completada",
-            Some(TaskStatus::Cancelada) => "cancelada",
-            None => "todas",
+            Some(TaskStatus::Pendiente) => state.locale.filters.pending.as_str(),
+            Some(TaskStatus::Completada) => state.locale.filters.completed.as_str(),
+            Some(TaskStatus::Cancelada) => state.locale.filters.cancelled.as_str(),
+            None => state.locale.filters.all.as_str(),
         };
         let priority_label = match state.tareas_filter.priority {
-            Some(Priority::Alta) => "alta",
-            Some(Priority::Media) => "media",
-            Some(Priority::Baja) => "baja",
-            None => "todas",
+            Some(Priority::Alta) => state.locale.filters.high.as_str(),
+            Some(Priority::Media) => state.locale.filters.medium.as_str(),
+            Some(Priority::Baja) => state.locale.filters.low.as_str(),
+            None => state.locale.filters.all.as_str(),
         };
         let group_label = match &state.tareas_filter.group_id {
-            None => "todos".to_string(),
-            Some(None) => "sin grupo".to_string(),
+            None => state.locale.filters.all_groups.clone(),
+            Some(None) => state.locale.filters.no_group.clone(),
             Some(Some(gid)) => groups
                 .iter()
                 .find(|g| g.id == *gid)
@@ -2683,15 +2763,16 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
         };
         let date_label = match (&state.tareas_filter.from_date, &state.tareas_filter.to_date) {
             (None, None) => String::new(),
-            (Some(f), Some(t)) if f == t => format!("  fecha:{}", f),
-            (Some(f), Some(t)) => format!("  fecha:{}/{}", f, t),
-            (Some(f), None) => format!("  desde:{}", f),
-            (None, Some(t)) => format!("  hasta:{}", t),
+            (Some(f), Some(t)) if f == t => format!("  {}:{}", state.locale.form_labels.date.trim(), f),
+            (Some(f), Some(t)) => format!("  {}:{}/{}", state.locale.form_labels.date.trim(), f, t),
+            (Some(f), None) => format!("  {}:{}", state.locale.form_labels.from_date.trim(), f),
+            (None, Some(t)) => format!("  {}:{}", state.locale.form_labels.to_date.trim(), t),
         };
-        let filter_line = format!(
-            "Filtros: estado:{}  prioridad:{}  grupo:{}{}",
-            status_label, priority_label, group_label, date_label
-        );
+        let filter_line = state.locale.filters.filters_prefix
+            .replace("{status}", status_label)
+            .replace("{priority}", priority_label)
+            .replace("{group}", &group_label)
+            .replace("{date}", &date_label);
         task_items.push(ListItem::new(Line::from(Span::styled(
             filter_line,
             Style::default().fg(Color::Yellow),
@@ -2722,7 +2803,7 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
 
         let deadline_str = t.deadline.as_deref().map(|d| {
             if let Some(pos) = d.find('T') { &d[..pos] } else { d }
-        }).unwrap_or("sin fecha");
+        }).unwrap_or(state.locale.hints.no_date.as_str());
 
         let label = format!(
             " {} {}[{}] {} ({})",
@@ -2745,20 +2826,20 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
 
     if tasks.is_empty() {
         task_items.push(ListItem::new(Line::from(Span::styled(
-            "  (sin tareas)",
+            state.locale.misc.no_tasks.clone(),
             Style::default().fg(Color::DarkGray),
         ))));
     }
 
     let task_hint = if state.tareas_search_active {
-        "  ↑↓:nav  Enter:aceptar  Esc:cancelar"
+        state.locale.hints.tasks_search.as_str()
     } else if state.tareas_section == TareasSection::Tasks {
-        "  ↑↓:nav  n:nueva  e:edit  c:ok  d:del  f:filtro  /:buscar  s:grupos"
+        state.locale.hints.tasks_nav.as_str()
     } else {
-        "  s:tareas"
+        state.locale.hints.tasks_switch_to_groups.as_str()
     };
     task_items.push(ListItem::new(Line::from(Span::styled(
-        task_hint,
+        task_hint.to_string(),
         Style::default().fg(Color::DarkGray),
     ))));
 
@@ -2786,12 +2867,12 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
     // --- Groups section ---
     let mut group_items: Vec<ListItem> = Vec::new();
     group_items.push(ListItem::new(Line::from(Span::styled(
-        "── Grupos ──",
+        state.locale.misc.groups_separator.clone(),
         Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
     ))));
 
     if groups.is_empty() {
-        group_items.push(ListItem::new("  (sin grupos)"));
+        group_items.push(ListItem::new(state.locale.misc.no_groups.clone()));
     } else {
         for (i, g) in groups.iter().enumerate() {
             let selected = state.tareas_section == TareasSection::Groups && i == state.group_cursor;
@@ -2807,12 +2888,12 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
     }
 
     let group_hint = if state.tareas_section == TareasSection::Groups {
-        "  ↑↓:nav g:nuevo e:edit d:del s:tareas"
+        state.locale.hints.groups_nav.as_str()
     } else {
-        "  s:grupos"
+        state.locale.hints.groups_switch_to_tasks.as_str()
     };
     group_items.push(ListItem::new(Line::from(Span::styled(
-        group_hint,
+        group_hint.to_string(),
         Style::default().fg(Color::DarkGray),
     ))));
 
@@ -2820,7 +2901,7 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
 }
 
 fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
-    let block = panel_block("Calendario");
+    let block = panel_block(state.locale.panels.calendar.as_str());
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -2841,7 +2922,7 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area:
             FlatCalEntry::DateHeader(date) => {
                 if date == &today {
                     today_line_idx = Some(lines.len());
-                    let label = format!("* {} (hoy)", date);
+                    let label = state.locale.misc.today_marker.replace("{date}", date);
                     lines.push(
                         ListItem::new(label)
                             .style(Style::default().fg(Color::Rgb(255, 20, 147)).add_modifier(Modifier::BOLD)),
@@ -2881,13 +2962,13 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area:
 
     if flat.is_empty() {
         lines.push(ListItem::new(Line::from(Span::styled(
-            "  (sin eventos ni tareas con fecha)",
+            state.locale.misc.no_calendar_entries.clone(),
             Style::default().fg(Color::DarkGray),
         ))));
     }
 
     lines.push(ListItem::new(Line::from(Span::styled(
-        "  ↑↓:navegar  n:nuevo  e:editar  c:completar  d:eliminar",
+        state.locale.hints.calendar_nav.clone(),
         Style::default().fg(Color::DarkGray),
     ))));
 
@@ -2922,16 +3003,18 @@ fn spinner_state(pending: &Option<(Uuid, Instant)>) -> Option<(char, u64)> {
 }
 
 fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let hint = "Tab:panel  Ctrl+Q:salir";
+    let hint = &state.locale.hints.global;
 
     if let Some((spinner_char, secs)) = spinner_state(&state.pending_request) {
-        let working = format!("{} Pensando... ({}s)", spinner_char, secs);
+        let working = state.locale.chat.thinking_status
+            .replace("{spinner}", &spinner_char.to_string())
+            .replace("{secs}", &secs.to_string());
         let text = format!("{}  │  {}", working, hint);
         let para = Paragraph::new(text).style(Style::default().fg(Color::Yellow));
         frame.render_widget(para, area);
     } else {
         let text = if state.app.status_bar.is_empty() {
-            hint.to_string()
+            hint.clone()
         } else {
             format!("{}  │  {}", state.app.status_bar, hint)
         };
@@ -2983,9 +3066,10 @@ mod tests {
             let is_empty = text.trim().is_empty();
             // The guard blocks sending when trim is empty.
             prop_assert!(is_empty, "strategy produces whitespace-only strings");
-            // Verify the warning text that would appear in the status bar.
-            let warning = "Mensaje vacío, escribe algo para enviar.";
-            prop_assert!(!warning.is_empty());
+            // The locale's empty_message string is used as the warning — just
+            // verify the guard logic works (the exact text is locale-dependent).
+            let locale = jinx::locale::load("en");
+            prop_assert!(!locale.errors.empty_message.is_empty());
         }
     }
 }

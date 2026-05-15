@@ -33,14 +33,21 @@ pub struct RemoteConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_language")]
+    pub language: String,
     pub provider: Provider,
     pub local: LocalConfig,
     pub remote: RemoteConfig,
 }
 
+fn default_language() -> String {
+    "en".to_string()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
+            language: "en".to_string(),
             provider: Provider::Local,
             local: LocalConfig {
                 model: "llama3.2:3b".to_string(),
@@ -69,23 +76,26 @@ pub fn config_path() -> PathBuf {
 
 /// Template written on first run. Contains inline comments so users understand
 /// each field without consulting external docs.
-const DEFAULT_TOML: &str = r#"# jinx — configuración del modelo de IA
-# Edita este archivo para cambiar de proveedor o modelo.
-# Ubicación: ~/Library/Application Support/jinx/config.toml (macOS)
-#             ~/.config/jinx/config.toml (Linux)
+const DEFAULT_TOML: &str = r#"# jinx — AI model configuration
+# Edit this file to change provider or model.
+# Location: ~/Library/Application Support/jinx/config.toml (macOS)
+#            ~/.config/jinx/config.toml (Linux)
 
-# Proveedor activo: "local" (Ollama, sin envío de datos) o "remote" (Amazon Bedrock)
+# UI language: "en" (English) or "es" (Spanish)
+language = "en"
+
+# Active provider: "local" (Ollama, no data sent externally) or "remote" (Amazon Bedrock)
 provider = "local"
 
 [local]
-# Modelos Ollama con soporte de tool calling: llama3.1, llama3.2, qwen3
+# Ollama models with tool calling support: llama3.1, llama3.2, qwen3
 model = "llama3.2:3b"
-# URL del servidor Ollama
+# Ollama server URL
 host = "http://localhost:11434"
 
 [remote]
-# ID del modelo en Amazon Bedrock
-# Ejemplo: "anthropic.claude-3-5-sonnet-20241022-v2:0"
+# Amazon Bedrock model ID
+# Example: "anthropic.claude-3-5-sonnet-20241022-v2:0"
 model_id = ""
 "#;
 

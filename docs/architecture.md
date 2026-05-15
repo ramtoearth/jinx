@@ -1,11 +1,11 @@
-# Arquitectura — Terminal Day Organizer
+# Architecture — Terminal Day Organizer
 
-## 1. Arquitectura general del sistema
+## 1. General System Architecture
 
 ```mermaid
 graph TB
-    subgraph usuario["Usuario"]
-        KB[Teclado]
+    subgraph user["User"]
+        KB[Keyboard]
     end
 
     subgraph tui["TUI — Rust (Ratatui)"]
@@ -18,12 +18,12 @@ graph TB
         READER["Reader Thread<br/>mpsc::channel"]
     end
 
-    subgraph canal["Canal_IPC — JSON Lines over stdio"]
-        STDIN[stdin del agente]
-        STDOUT[stdout del agente]
+    subgraph channel["IPC Channel — JSON Lines over stdio"]
+        STDIN[agent stdin]
+        STDOUT[agent stdout]
     end
 
-    subgraph agente["Agente — Python (Strands Agents)"]
+    subgraph agent["Agent — Python (Strands Agents)"]
         direction TB
         LOOP[Turn Loop<br/>main.py]
         STRAND[Strands Agent<br/>Claude LLM]
@@ -33,7 +33,7 @@ graph TB
         INFER[Inference Engine<br/>inference.py]
     end
 
-    subgraph disk["Disco"]
+    subgraph disk["Disk"]
         DB[("SQLite<br/>~/.local/share/<br/>terminal-day-organizer/db.sqlite")]
         LOG["/tmp/tui_agent.log"]
     end
@@ -46,41 +46,41 @@ graph TB
     STORE --> DB
     MAIN --> READER
 
-    READER -->|parsea JSON Lines| MAIN
-    MAIN -->|escribe JSON Lines| STDIN
-    STDOUT -->|lee líneas| READER
+    READER -->|parses JSON Lines| MAIN
+    MAIN -->|writes JSON Lines| STDIN
+    STDOUT -->|reads lines| READER
 
     LOOP --> STRAND
     STRAND --> STOOLS
     STRAND --> BTOOLS
     STRAND --> INFER
     STOOLS --> STDIO
-    STDIO -->|escribe request| STDOUT
-    STDIO -->|lee response| STDIN
+    STDIO -->|writes request| STDOUT
+    STDIO -->|reads response| STDIN
     STRAND -->|streaming stderr| LOG
 ```
 
 ---
 
-## 2. Protocolo IPC — Canal_IPC (JSON Lines)
+## 2. IPC Protocol — IPC Channel (JSON Lines)
 
 ```mermaid
 sequenceDiagram
     participant TUI as TUI (Rust)
-    participant AG as Agente (Python)
+    participant AG as Agent (Python)
 
     TUI->>AG: agent_init {timezone, model_provider}
     AG->>TUI: agent_init_ack {provider_notice?}
 
-    loop Por cada mensaje del usuario
+    loop For each user message
         TUI->>AG: user_message {text}
         
-        opt El agente necesita persistir datos
+        opt Agent needs to persist data
             AG->>TUI: storage.create_task {title, priority, ...}
-            TUI->>AG: response {task: {...}} o error {code, message}
+            TUI->>AG: response {task: {...}} or error {code, message}
         end
 
-        opt El agente razona sobre grupos
+        opt Agent reasons about groups
             AG->>TUI: storage.list_groups {}
             TUI->>AG: response {groups: [...]}
         end
@@ -93,7 +93,7 @@ sequenceDiagram
 
 ---
 
-## 3. Estructura del Envelope IPC
+## 3. IPC Envelope Structure
 
 ```mermaid
 classDiagram
@@ -151,21 +151,21 @@ classDiagram
 
 ---
 
-## 4. Modelo de datos (Almacén SQLite)
+## 4. Data Model (SQLite Store)
 
 ```mermaid
 erDiagram
     GROUP {
         i64 id PK
-        string name "único"
+        string name "unique"
         string color "#RRGGBB"
     }
 
     TASK {
         i64 id PK
         string title
-        Priority priority "alta | media | baja"
-        TaskStatus status "pendiente | completada | cancelada"
+        Priority priority "high | medium | low"
+        TaskStatus status "pending | completed | cancelled"
         string created_at "ISO 8601"
         string deadline "ISO 8601, nullable"
         i64 group_id FK "nullable"
@@ -180,36 +180,36 @@ erDiagram
         i64 group_id FK "nullable"
     }
 
-    GROUP ||--o{ TASK : "clasifica"
-    GROUP ||--o{ EVENT : "clasifica"
+    GROUP ||--o{ TASK : "classifies"
+    GROUP ||--o{ EVENT : "classifies"
 ```
 
 ---
 
-## 5. Flujo de estado del TUI — máquina de reducción pura
+## 5. TUI State Flow — pure reduction machine
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Chat : inicio
+    [*] --> Chat : start
 
-    state "Panel activo" as PA {
+    state "Active Panel" as PA {
         Chat
-        Tareas
-        Calendario
-        Proximos
+        Tasks
+        Calendar
+        Upcoming
     }
 
-    Chat --> Tareas : Tab
-    Tareas --> Calendario : Tab
-    Calendario --> Proximos : Tab
-    Proximos --> Chat : Tab
+    Chat --> Tasks : Tab
+    Tasks --> Calendar : Tab
+    Calendar --> Upcoming : Tab
+    Upcoming --> Chat : Tab
 
-    Tareas --> Chat : Shift+Tab
-    Calendario --> Tareas : Shift+Tab
-    Proximos --> Calendario : Shift+Tab
-    Chat --> Proximos : Shift+Tab
+    Tasks --> Chat : Shift+Tab
+    Calendar --> Tasks : Shift+Tab
+    Upcoming --> Calendar : Shift+Tab
+    Chat --> Upcoming : Shift+Tab
 
-    state "Modal activo" as MOD {
+    state "Active Modal" as MOD {
         NewTask
         EditTask
         DeleteTask
@@ -222,46 +222,46 @@ stateDiagram-v2
         Error
     }
 
-    PA --> MOD : n/e/d/g (teclas de panel)
+    PA --> MOD : n/e/d/g (panel keys)
     MOD --> PA : Esc / Enter
     
-    state "Viewport demasiado pequeño" as SMALL
+    state "Viewport too small" as SMALL
     PA --> SMALL : Resize < 60x20
     SMALL --> PA : Resize ≥ 60x20
 ```
 
 ---
 
-## 6. Motor de inferencia de Grupos
+## 6. Group Inference Engine
 
 ```mermaid
 flowchart TD
-    MSG[Mensaje del usuario] --> NORM[normalize\nlowercase + strip acentos]
-    NORM --> TRI[ngrams n=3\ncon padding de espacios]
+    MSG[User message] --> NORM[normalize\nlowercase + strip accents]
+    NORM --> TRI[ngrams n=3\nwith space padding]
     
-    TRI --> JAC{Para cada Grupo}
+    TRI --> JAC{For each Group}
     
-    subgraph por_grupo["Por cada Grupo en el snapshot"]
-        GNORM[normalize nombre + títulos miembros]
-        GTRI[ngrams del Grupo]
+    subgraph per_group["For each Group in the snapshot"]
+        GNORM[normalize name + member titles]
+        GTRI[Group ngrams]
         SCORE[Jaccard similarity\n|A ∩ B| / |A ∪ B|]
         GNORM --> GTRI --> SCORE
     end
     
-    JAC --> por_grupo
+    JAC --> per_group
     
-    por_grupo --> ARGMAX[argmax score\ntie-break → id más bajo]
+    per_group --> ARGMAX[argmax score\ntie-break → lowest id]
     
-    ARGMAX --> THRESH{score ≥ umbral?}
+    ARGMAX --> THRESH{score ≥ threshold?}
     
-    THRESH -->|score ≥ 0.35 AUTO| ASSIGN[Auto-asignar Grupo]
-    THRESH -->|0.20 ≤ score < 0.35| SUGGEST[Sugerir con confirmación]
-    THRESH -->|score < 0.20| NEW[Proponer crear Grupo nuevo]
+    THRESH -->|score ≥ 0.35 AUTO| ASSIGN[Auto-assign Group]
+    THRESH -->|0.20 ≤ score < 0.35| SUGGEST[Suggest with confirmation]
+    THRESH -->|score < 0.20| NEW[Propose creating new Group]
 ```
 
 ---
 
-## 7. Capas del proyecto (workspace Cargo + paquete Python)
+## 7. Project Layers (Cargo workspace + Python package)
 
 ```mermaid
 graph BT
@@ -276,17 +276,17 @@ graph BT
         end
 
         subgraph tui_crate["crate: tui"]
-            IPC_RS[ipc.rs\nEnvelope, MessageType\nDTOs de la capa IPC]
+            IPC_RS[ipc.rs\nEnvelope, MessageType\nIPC layer DTOs]
             IPC_HAND[ipc_handler.rs\nDispatcher storage.*]
             APP_RS[app.rs\nAppState, Panel\nreduce&#40;&#41;]
-            MAIN_RS[main.rs\nEvent loop, render\nmodales, formularios]
+            MAIN_RS[main.rs\nEvent loop, render\nmodals, forms]
             COLOR_RS[color.rs]
-            CAL_RS[calendario.rs]
-            PROX_RS[proximos.rs]
+            CAL_RS[calendar.rs]
+            PROX_RS[upcoming.rs]
         end
     end
 
-    subgraph py_pkg["Paquete Python: agent/"]
+    subgraph py_pkg["Python Package: agent/"]
         IPC_PY[ipc.py\nStdioClient\nEnvelope TypedDicts]
         STOR_T[storage_tools.py\n16 @tools proxy]
         INFER_PY[inference.py\ninfer_group_candidate]
