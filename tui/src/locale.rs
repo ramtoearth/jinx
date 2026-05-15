@@ -62,6 +62,8 @@ pub struct FormLabels {
     pub ollama_host: String,
     pub ollama_model: String,
     pub bedrock_model: String,
+    pub backend: String,
+    pub model: String,
     pub date: String,
     pub datetime: String,
     pub from_date: String,
@@ -95,6 +97,7 @@ pub struct ErrorMessages {
     pub terminal_too_small: String,
     pub timeout: String,
     pub agent_start: String,
+    pub model_required: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

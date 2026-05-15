@@ -199,11 +199,17 @@ struct GroupFormState {
 
 #[derive(Default, Clone)]
 struct SettingsFormState {
-    field: usize,         // 0=language, 1=provider, 2=model, 3=host (host only when local)
-    language_idx: usize,  // 0=English, 1=Español
-    provider_idx: usize,  // 0=Local, 1=Remote
-    model_input: String,
+    field: usize,              // 0=language, 1=provider, 2=model|backend, 3=host|model
+    language_idx: usize,       // 0=English, 1=Español
+    provider_idx: usize,       // 0=Local, 1=Remote
+    backend_idx: usize,        // 0=Bedrock, 1=OpenAI, 2=Anthropic, 3=Gemini, 4=LlamaAPI
+    local_model_input: String,
     host_input: String,
+    bedrock_model_input: String,
+    openai_model_input: String,
+    anthropic_model_input: String,
+    gemini_model_input: String,
+    llamaapi_model_input: String,
 }
 
 #[derive(Clone)]
@@ -1006,11 +1012,18 @@ fn handle_modal_paste(state: &mut RuntimeState, data: &str) {
             1 => state.group_form.color_custom.push_str(&clean),
             _ => {}
         },
-        Some(Modal::Settings) => match state.settings_form.field {
-            2 => state.settings_form.model_input.push_str(&clean),
-            3 => state.settings_form.host_input.push_str(&clean),
-            _ => {}
-        },
+        Some(Modal::Settings) => {
+            let is_local = state.settings_form.provider_idx == 0;
+            if is_local {
+                match state.settings_form.field {
+                    2 => state.settings_form.local_model_input.push_str(&clean),
+                    3 => state.settings_form.host_input.push_str(&clean),
+                    _ => {}
+                }
+            } else if state.settings_form.field == 3 {
+                active_remote_model(&mut state.settings_form).push_str(&clean);
+            }
+        }
         _ => {}
     }
 }
@@ -1525,22 +1538,44 @@ fn apply_filter(state: &mut RuntimeState) {
 
 fn open_settings_modal(state: &mut RuntimeState) {
     let cfg = app_config::load();
+    let backend_idx = match cfg.remote.backend {
+        app_config::RemoteBackend::Bedrock => 0,
+        app_config::RemoteBackend::Openai => 1,
+        app_config::RemoteBackend::Anthropic => 2,
+        app_config::RemoteBackend::Gemini => 3,
+        app_config::RemoteBackend::Llamaapi => 4,
+    };
     state.settings_form = SettingsFormState {
         language_idx: if cfg.language == "es" { 1 } else { 0 },
         provider_idx: if cfg.provider == app_config::Provider::Local { 0 } else { 1 },
-        model_input: match &cfg.provider {
-            app_config::Provider::Local => cfg.local.model.clone(),
-            app_config::Provider::Remote => cfg.remote.model_id.clone(),
-        },
+        backend_idx,
+        local_model_input: cfg.local.model.clone(),
         host_input: cfg.local.host.clone(),
+        bedrock_model_input: cfg.remote.bedrock_model.clone(),
+        openai_model_input: cfg.remote.openai_model.clone(),
+        anthropic_model_input: cfg.remote.anthropic_model.clone(),
+        gemini_model_input: cfg.remote.gemini_model.clone(),
+        llamaapi_model_input: cfg.remote.llamaapi_model.clone(),
         field: 0,
     };
     state.app.modal = Some(Modal::Settings);
 }
 
+const N_BACKENDS: usize = 5;
+
+fn active_remote_model(form: &mut SettingsFormState) -> &mut String {
+    match form.backend_idx {
+        0 => &mut form.bedrock_model_input,
+        1 => &mut form.openai_model_input,
+        2 => &mut form.anthropic_model_input,
+        3 => &mut form.gemini_model_input,
+        _ => &mut form.llamaapi_model_input,
+    }
+}
+
 fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let is_local = state.settings_form.provider_idx == 0;
-    let n_fields = if is_local { 4 } else { 3 };
+    let n_fields: usize = 4;
     match key.code {
         KeyCode::Tab => {
             state.settings_form.field = (state.settings_form.field + 1) % n_fields;
@@ -1553,20 +1588,37 @@ fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::Key
         }
         KeyCode::Left | KeyCode::Right if state.settings_form.field == 1 => {
             state.settings_form.provider_idx = 1 - state.settings_form.provider_idx;
-            if state.settings_form.provider_idx == 1 && state.settings_form.field >= 3 {
-                state.settings_form.field = 2;
+        }
+        KeyCode::Left | KeyCode::Right if state.settings_form.field == 2 && !is_local => {
+            let idx = &mut state.settings_form.backend_idx;
+            if matches!(key.code, KeyCode::Right) {
+                *idx = (*idx + 1) % N_BACKENDS;
+            } else {
+                *idx = (*idx + N_BACKENDS - 1) % N_BACKENDS;
             }
         }
-        KeyCode::Char(c) => match state.settings_form.field {
-            2 => state.settings_form.model_input.push(c),
-            3 => state.settings_form.host_input.push(c),
-            _ => {}
-        },
-        KeyCode::Backspace => match state.settings_form.field {
-            2 => { state.settings_form.model_input.pop(); }
-            3 => { state.settings_form.host_input.pop(); }
-            _ => {}
-        },
+        KeyCode::Char(c) => {
+            if is_local {
+                match state.settings_form.field {
+                    2 => state.settings_form.local_model_input.push(c),
+                    3 => state.settings_form.host_input.push(c),
+                    _ => {}
+                }
+            } else if state.settings_form.field == 3 {
+                active_remote_model(&mut state.settings_form).push(c);
+            }
+        }
+        KeyCode::Backspace => {
+            if is_local {
+                match state.settings_form.field {
+                    2 => { state.settings_form.local_model_input.pop(); }
+                    3 => { state.settings_form.host_input.pop(); }
+                    _ => {}
+                }
+            } else if state.settings_form.field == 3 {
+                active_remote_model(&mut state.settings_form).pop();
+            }
+        }
         KeyCode::Enter => save_settings(state),
         KeyCode::Esc => state.app.modal = None,
         _ => {}
@@ -1577,6 +1629,15 @@ fn save_settings(state: &mut RuntimeState) {
     let is_local = state.settings_form.provider_idx == 0;
     let defaults = app_config::Config::default();
     let lang = if state.settings_form.language_idx == 1 { "es" } else { "en" };
+    let form = &state.settings_form;
+    let backend = match form.backend_idx {
+        0 => app_config::RemoteBackend::Bedrock,
+        1 => app_config::RemoteBackend::Openai,
+        2 => app_config::RemoteBackend::Anthropic,
+        3 => app_config::RemoteBackend::Gemini,
+        _ => app_config::RemoteBackend::Llamaapi,
+    };
+
     let cfg = app_config::Config {
         language: lang.to_string(),
         provider: if is_local {
@@ -1585,24 +1646,29 @@ fn save_settings(state: &mut RuntimeState) {
             app_config::Provider::Remote
         },
         local: app_config::LocalConfig {
-            model: if is_local {
-                state.settings_form.model_input.trim().to_string()
-            } else {
-                defaults.local.model
+            model: {
+                let m = form.local_model_input.trim();
+                if m.is_empty() { defaults.local.model } else { m.to_string() }
             },
-            host: if is_local {
-                let h = state.settings_form.host_input.trim().to_string();
-                if h.is_empty() { defaults.local.host } else { h }
-            } else {
-                defaults.local.host
+            host: {
+                let h = form.host_input.trim();
+                if h.is_empty() { defaults.local.host } else { h.to_string() }
             },
         },
-        remote: app_config::RemoteConfig {
-            model_id: if !is_local {
-                state.settings_form.model_input.trim().to_string()
-            } else {
-                String::new()
-            },
+        remote: {
+            let d = &defaults.remote;
+            let or_default = |input: &str, fallback: &str| {
+                let trimmed = input.trim();
+                if trimmed.is_empty() { fallback.to_string() } else { trimmed.to_string() }
+            };
+            app_config::RemoteConfig {
+                backend,
+                bedrock_model: form.bedrock_model_input.trim().to_string(),
+                openai_model: or_default(&form.openai_model_input, &d.openai_model),
+                anthropic_model: or_default(&form.anthropic_model_input, &d.anthropic_model),
+                gemini_model: or_default(&form.gemini_model_input, &d.gemini_model),
+                llamaapi_model: or_default(&form.llamaapi_model_input, &d.llamaapi_model),
+            }
         },
     };
     if let Err(e) = app_config::save(&cfg) {
@@ -1976,19 +2042,23 @@ fn spawn_agent(state: &mut RuntimeState) {
     // Send agent_init
     let cfg = app_config::load();
     let timezone = iana_timezone();
-    let (model_provider, ollama_model, ollama_host, bedrock_model_id) = match cfg.provider {
+    let (model_provider, backend, model_id, host) = match cfg.provider {
         app_config::Provider::Local => (
             ModelProvider::Local,
+            "ollama".to_string(),
             cfg.local.model,
-            cfg.local.host,
-            None,
+            Some(cfg.local.host),
         ),
-        app_config::Provider::Remote => (
-            ModelProvider::Remote,
-            String::new(),
-            String::new(),
-            Some(cfg.remote.model_id).filter(|s| !s.is_empty()),
-        ),
+        app_config::Provider::Remote => {
+            let (be, mid) = match cfg.remote.backend {
+                app_config::RemoteBackend::Bedrock => ("bedrock", cfg.remote.bedrock_model),
+                app_config::RemoteBackend::Openai => ("openai", cfg.remote.openai_model),
+                app_config::RemoteBackend::Anthropic => ("anthropic", cfg.remote.anthropic_model),
+                app_config::RemoteBackend::Gemini => ("gemini", cfg.remote.gemini_model),
+                app_config::RemoteBackend::Llamaapi => ("llamaapi", cfg.remote.llamaapi_model),
+            };
+            (ModelProvider::Remote, be.to_string(), mid, None)
+        }
     };
     let init_env = Envelope::new(
         Kind::Request,
@@ -1997,9 +2067,9 @@ fn spawn_agent(state: &mut RuntimeState) {
             timezone,
             language: cfg.language,
             model_provider,
-            ollama_model,
-            ollama_host,
-            bedrock_model_id,
+            backend,
+            model_id,
+            host,
         },
     )
     .expect("agent_init serializes");
@@ -2490,20 +2560,33 @@ fn render_settings_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: 
 
     let language_label = if form.language_idx == 1 { "← Español →" } else { "← English →" };
     let provider_label = if is_local { "← Local →" } else { "← Remote →" };
-    let model_label = if is_local { state.locale.form_labels.ollama_model.as_str() } else { state.locale.form_labels.bedrock_model.as_str() };
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
     lines.push(form_line(state.locale.form_labels.language.as_str(), language_label.to_string(), form.field == 0));
     lines.push(form_line(state.locale.form_labels.provider.as_str(), provider_label.to_string(), form.field == 1));
-    lines.push(form_line(model_label, form.model_input.clone(), form.field == 2));
+
     if is_local {
+        lines.push(form_line(state.locale.form_labels.ollama_model.as_str(), form.local_model_input.clone(), form.field == 2));
         let host_display = if form.host_input.is_empty() {
             "http://localhost:11434".to_string()
         } else {
             form.host_input.clone()
         };
         lines.push(form_line(state.locale.form_labels.ollama_host.as_str(), host_display, form.field == 3));
+    } else {
+        let backend_names = ["Bedrock", "OpenAI", "Anthropic", "Gemini", "LlamaAPI"];
+        let backend_label = format!("← {} →", backend_names[form.backend_idx]);
+        lines.push(form_line(state.locale.form_labels.backend.as_str(), backend_label, form.field == 2));
+        let model_value = match form.backend_idx {
+            0 => &form.bedrock_model_input,
+            1 => &form.openai_model_input,
+            2 => &form.anthropic_model_input,
+            3 => &form.gemini_model_input,
+            _ => &form.llamaapi_model_input,
+        };
+        lines.push(form_line(state.locale.form_labels.model.as_str(), model_value.clone(), form.field == 3));
     }
+
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         state.locale.hints.settings_form.clone(),

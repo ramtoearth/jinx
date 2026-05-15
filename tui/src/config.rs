@@ -17,18 +17,36 @@ pub enum Provider {
     Remote,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteBackend {
+    Bedrock,
+    Openai,
+    Anthropic,
+    Gemini,
+    Llamaapi,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalConfig {
-    /// Ollama model ID. Must support native tool calling (llama3.1, llama3.2, qwen3).
     pub model: String,
-    /// URL of the Ollama server.
     pub host: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteConfig {
-    /// Amazon Bedrock model ID, e.g. "anthropic.claude-3-5-sonnet-20241022-v2:0".
-    pub model_id: String,
+    #[serde(default = "default_backend")]
+    pub backend: RemoteBackend,
+    #[serde(default, alias = "model_id")]
+    pub bedrock_model: String,
+    #[serde(default)]
+    pub openai_model: String,
+    #[serde(default)]
+    pub anthropic_model: String,
+    #[serde(default)]
+    pub gemini_model: String,
+    #[serde(default)]
+    pub llamaapi_model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +62,10 @@ fn default_language() -> String {
     "en".to_string()
 }
 
+fn default_backend() -> RemoteBackend {
+    RemoteBackend::Bedrock
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -54,7 +76,12 @@ impl Default for Config {
                 host: "http://localhost:11434".to_string(),
             },
             remote: RemoteConfig {
-                model_id: String::new(),
+                backend: RemoteBackend::Bedrock,
+                bedrock_model: String::new(),
+                openai_model: "gpt-4o".to_string(),
+                anthropic_model: "claude-sonnet-4-6".to_string(),
+                gemini_model: "gemini-2.5-flash-lite".to_string(),
+                llamaapi_model: "Llama-4-Maverick-17B-128E-Instruct-FP8".to_string(),
             },
         }
     }
@@ -84,7 +111,7 @@ const DEFAULT_TOML: &str = r#"# jinx — AI model configuration
 # UI language: "en" (English) or "es" (Spanish)
 language = "en"
 
-# Active provider: "local" (Ollama, no data sent externally) or "remote" (Amazon Bedrock)
+# Active provider: "local" (Ollama) or "remote" (cloud)
 provider = "local"
 
 [local]
@@ -94,9 +121,17 @@ model = "llama3.2:3b"
 host = "http://localhost:11434"
 
 [remote]
-# Amazon Bedrock model ID
-# Example: "anthropic.claude-3-5-sonnet-20241022-v2:0"
-model_id = ""
+# Active remote backend: bedrock, openai, anthropic, gemini, llamaapi
+backend = "bedrock"
+# Per-backend model IDs (each backend remembers its own model)
+bedrock_model = ""
+openai_model = "gpt-4o"
+anthropic_model = "claude-sonnet-4-6"
+gemini_model = "gemini-2.5-flash-lite"
+llamaapi_model = "Llama-4-Maverick-17B-128E-Instruct-FP8"
+# API keys are read from environment variables:
+#   OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, LLAMA_API_KEY
+#   Amazon Bedrock uses AWS credentials (aws configure)
 "#;
 
 /// Persist `cfg` back to `config_path()`, overwriting the file.
@@ -138,5 +173,36 @@ pub fn load() -> Config {
                 Config::default()
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_toml_parses() {
+        let cfg: Config = toml::from_str(DEFAULT_TOML).expect("DEFAULT_TOML must parse");
+        assert_eq!(cfg.provider, Provider::Local);
+        assert_eq!(cfg.remote.backend, RemoteBackend::Bedrock);
+    }
+
+    #[test]
+    fn legacy_config_with_model_id_parses() {
+        let legacy = r#"
+language = "en"
+provider = "remote"
+
+[local]
+model = "llama3.2:3b"
+host = "http://localhost:11434"
+
+[remote]
+model_id = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+"#;
+        let cfg: Config = toml::from_str(legacy).expect("legacy config must parse");
+        assert_eq!(cfg.remote.backend, RemoteBackend::Bedrock);
+        assert_eq!(cfg.remote.bedrock_model, "anthropic.claude-3-5-sonnet-20241022-v2:0");
+        assert!(cfg.remote.openai_model.is_empty());
     }
 }

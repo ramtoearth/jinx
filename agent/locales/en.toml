@@ -20,10 +20,20 @@ Group rules:
   to resolve the group name to its ID before using it in create_task or create_event.
 - If find_group_by_name returns None, ask the user if they want to create the group.
 - Group search is case-insensitive: "Work", "work", and "WORK" are the same group.
+
+Response rules:
+- After completing any tool call, ALWAYS respond to the user confirming what you did. Never end your turn silently.
+- Keep confirmations short and natural (e.g. "Done, task created for tomorrow at 3pm.").
 """
 
 provider_notice_local = "Agent using local Ollama ({model}). No data sent to the cloud."
 provider_notice_remote = "Agent using Amazon Bedrock ({model}). Chat messages are sent to an external service."
+provider_notice_bedrock = "Agent using Amazon Bedrock ({model}). Messages are sent to AWS."
+provider_notice_openai = "Agent using OpenAI ({model}). Messages are sent to OpenAI."
+provider_notice_anthropic = "Agent using Anthropic ({model}). Messages are sent to Anthropic."
+provider_notice_gemini = "Agent using Gemini ({model}). Messages are sent to Google."
+provider_notice_llamaapi = "Agent using LlamaAPI ({model}). Messages are sent to LlamaAPI."
+error_missing_api_key = "{env_var} environment variable is not set. Please set it and restart jinx."
 
 error_operation_failed = "Could not complete the operation: {error}"
 error_unexpected = "An unexpected error occurred: {error}"

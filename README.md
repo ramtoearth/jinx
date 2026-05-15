@@ -20,20 +20,6 @@ The script downloads the precompiled binary for your platform and installs `uv` 
 irm https://raw.githubusercontent.com/ramtoearth/jinx/main/scripts/install.ps1 | iex
 ```
 
-### Manual installation
-
-Download the binary for your system from the [releases page](https://github.com/ramtoearth/jinx/releases/latest):
-
-| System | File |
-|--------|------|
-| macOS Apple Silicon | `jinx-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
-| macOS Intel | `jinx-vX.Y.Z-x86_64-apple-darwin.tar.gz` |
-| Linux x86-64 | `jinx-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux ARM64 | `jinx-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
-| Windows x64 | `jinx-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
-
-Each file includes a `.sha256` to verify download integrity.
-
 ## Getting started
 
 Once installed, you need Ollama with a model that supports tool calling:
@@ -54,29 +40,42 @@ Change the model directly from the app with **Ctrl+P**:
 
 ![Change model](assets/demoConfigModelo.gif)
 
-Select the provider (Local/Remote), type the model name, and press Enter. The agent restarts automatically.
+Select the provider (**Local** / **Remote**), choose a backend, type the model name, and press Enter. The agent restarts automatically.
 
-### Ollama (local)
+### Local
+
+#### Ollama
+
+Runs entirely on your machine — no data leaves the device. Requires [Ollama](https://ollama.com) with a model that supports tool calling.
 
 Models with tool calling support: `llama3.1`, `llama3.2`, `qwen3`.
 
-### Amazon Bedrock (remote)
+### Remote
 
-1. Authenticate with AWS CLI v2 (version 2.32.0+):
+Remote providers send chat messages to an external service. Select **Remote** in Ctrl+P, then pick a backend with ←/→.
+
+API keys are read from environment variables — add them to your shell profile (e.g., `~/.zshrc`):
 
 ```bash
-aws login
+export OPENAI_API_KEY="..."
+export ANTHROPIC_API_KEY="..."
+export GOOGLE_API_KEY="..."
+export LLAMA_API_KEY="-..."
 ```
 
-This opens the browser to sign in. Credentials are renewed for up to 12 hours. See the [official documentation](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html).
+| Backend | Default model | Env variable | Setup |
+|---------|--------------|--------------|-------|
+| **Bedrock** | SDK default (region-aware) | AWS credentials (`aws login`) | Enable model in Amazon Bedrock → Model access |
+| **OpenAI** | `gpt-4o` | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) |
+| **Anthropic** | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
+| **Gemini** | `gemini-2.5-flash-lite` | `GOOGLE_API_KEY` | [aistudio.google.dev](https://aistudio.google.dev) |
+| **LlamaAPI** | `Llama-4-Maverick-17B-128E-Instruct-FP8` | `LLAMA_API_KEY` | [llamaapi.com](https://www.llamaapi.com) |
 
-2. Enable the model in Bedrock (Amazon Bedrock → Model access) in your region.
-
-3. Open **Ctrl+P** in jinx, select Remote, and type the model ID (e.g., `anthropic.claude-3-5-sonnet-20241022-v2:0`).
+You can type any model ID supported by each provider. For the full list of supported providers and model options, see the [Strands Agents model providers documentation](https://strandsagents.com/docs/user-guide/concepts/model-providers/).
 
 ## Language
 
-Jinx defaults to English. To use it in Spanish, set `language = "es"` in your config file (`~/.config/jinx/config.toml`).
+Jinx defaults to English. Switch to Spanish from **Ctrl+P** (Language field). Currently supported languages are `English` and `Spanish`.
 
 ## Building from source
 

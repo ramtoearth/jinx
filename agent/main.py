@@ -25,12 +25,65 @@ _BUILTIN_TOOLS = [current_time, file_read, file_write, editor, think]
 # Agent setup
 # ---------------------------------------------------------------------------
 
+class ConfigError(Exception):
+    """Raised when a required configuration value is missing."""
+
+
+_ENV_VARS: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
+    "llamaapi": "LLAMA_API_KEY",
+}
+
+
+def _require_env(backend: str) -> str:
+    var = _ENV_VARS[backend]
+    value = os.environ.get(var)
+    if not value:
+        raise ConfigError(var)
+    return value
+
+
+def _build_model(backend: str, model_id: str, host: str | None) -> Any:
+    match backend:
+        case "ollama":
+            from strands.models.ollama import OllamaModel  # type: ignore[import]
+            return OllamaModel(
+                model_id=model_id,
+                host=host or "http://localhost:11434",
+                max_tokens=4096,
+                temperature=0,
+                options={"num_ctx": 8192},
+            )
+        case "bedrock":
+            from strands.models import BedrockModel  # type: ignore[import]
+            return BedrockModel(model_id=model_id) if model_id else BedrockModel()
+        case "openai":
+            api_key = _require_env("openai")
+            from strands.models.openai import OpenAIModel  # type: ignore[import]
+            return OpenAIModel(client_args={"api_key": api_key}, model_id=model_id)
+        case "anthropic":
+            api_key = _require_env("anthropic")
+            from strands.models.anthropic import AnthropicModel  # type: ignore[import]
+            return AnthropicModel(client_args={"api_key": api_key}, model_id=model_id)
+        case "gemini":
+            api_key = _require_env("gemini")
+            from strands.models.gemini import GeminiModel  # type: ignore[import]
+            return GeminiModel(client_args={"api_key": api_key}, model_id=model_id)
+        case "llamaapi":
+            api_key = _require_env("llamaapi")
+            from strands.models.llamaapi import LlamaAPIModel  # type: ignore[import]
+            return LlamaAPIModel(client_args={"api_key": api_key}, model_id=model_id)
+        case _:
+            raise ConfigError(f"unknown backend: {backend}")
+
+
 def _build_agent(
     system_prompt: str,
-    model_provider: str = "local",
-    ollama_model: str = "llama3.2:3b",
-    ollama_host: str = "http://localhost:11434",
-    bedrock_model_id: str | None = None,
+    backend: str = "ollama",
+    model_id: str = "llama3.2:3b",
+    host: str | None = None,
 ) -> Any:
     """Construct the Strands Agent with all tools registered."""
     try:
@@ -40,25 +93,9 @@ def _build_agent(
             f"strands-agents not installed: {exc}"
         ) from exc
 
-    from strands.models.ollama import OllamaModel  # type: ignore[import]
     from agent import storage_tools as st
 
-    if model_provider == "local":
-        model: Any = OllamaModel(
-            model_id=ollama_model,
-            host=ollama_host,
-            max_tokens=4096,
-            temperature=0,
-            options={
-                "num_ctx": 8192,
-            },
-        )
-    else:
-        if bedrock_model_id:
-            from strands.models import BedrockModel  # type: ignore[import]
-            model = BedrockModel(model_id=bedrock_model_id)
-        else:
-            model = None
+    model = _build_model(backend, model_id, host)
 
     tools = _BUILTIN_TOOLS + [
         st.list_tasks,
@@ -129,38 +166,58 @@ def main(
     set_client(client)
 
     # Wait for agent_init
-    model_provider = "local"
     language = "en"
-    ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
-    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    bedrock_model_id: str | None = os.environ.get("BEDROCK_MODEL_ID")
+    backend = "ollama"
+    raw_model_id = ""
+    host: str | None = None
 
     for env in client.incoming_lines():
         msg_type = env.get("type", "")
         if msg_type == "agent_init":
             payload = env.get("payload") or {}
-            model_provider = payload.get("model_provider", model_provider)
             language = payload.get("language", language)
-            ollama_model = payload.get("ollama_model") or ollama_model
-            ollama_host = payload.get("ollama_host") or ollama_host
-            bedrock_model_id = payload.get("bedrock_model_id") or bedrock_model_id
+            backend = payload.get("backend", backend)
+            raw_model_id = payload.get("model_id", "")
+            host = payload.get("host")
             break
         if msg_type == "shutdown":
             return
+
+    _fallback_models: dict[str, str] = {
+        "ollama": "llama3.2:3b",
+        "openai": "gpt-4o",
+        "anthropic": "claude-sonnet-4-6",
+        "gemini": "gemini-2.5-flash-lite",
+        "llamaapi": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+    }
+    model_id = raw_model_id.strip() or _fallback_models.get(backend, "")
 
     # Load locale
     loc = load_locale(language)
     agent_loc = loc.get("agent", {})
 
-    # Send agent_init_ack
+    # Build agent and send ack (or error notice)
     provider_notice: str | None = None
-    if model_provider == "local":
-        template = agent_loc.get("provider_notice_local", "")
-        provider_notice = template.replace("{model}", ollama_model)
-    elif model_provider == "remote":
-        bedrock_name = bedrock_model_id or "default"
-        template = agent_loc.get("provider_notice_remote", "")
-        provider_notice = template.replace("{model}", bedrock_name)
+    agent: Any = None
+    try:
+        if backend == "ollama":
+            template = agent_loc.get("provider_notice_local", "Using {model}")
+            provider_notice = template.replace("{model}", model_id)
+        else:
+            template_key = f"provider_notice_{backend}"
+            template = agent_loc.get(template_key, agent_loc.get("provider_notice_remote", "Using {model}"))
+            provider_notice = template.replace("{model}", model_id or "default")
+
+        system_prompt = agent_loc.get("system_prompt", "")
+        agent = _build_agent(
+            system_prompt=system_prompt,
+            backend=backend,
+            model_id=model_id,
+            host=host,
+        )
+    except ConfigError as e:
+        error_template = agent_loc.get("error_missing_api_key", "{env_var} is not set.")
+        provider_notice = error_template.replace("{env_var}", str(e))
 
     ack: Envelope = {
         "v": PROTOCOL_VERSION,
@@ -171,14 +228,8 @@ def main(
     }
     client.write_envelope(ack)
 
-    system_prompt = agent_loc.get("system_prompt", "")
-    agent = _build_agent(
-        system_prompt=system_prompt,
-        model_provider=model_provider,
-        ollama_model=ollama_model,
-        ollama_host=ollama_host,
-        bedrock_model_id=bedrock_model_id,
-    )
+    if agent is None:
+        return
 
     # Turn loop
     for env in client.incoming_lines():

@@ -249,21 +249,34 @@ fn arb_agent_reply_arm() -> impl Strategy<Value = Content> {
     })
 }
 
+fn arb_backend() -> impl Strategy<Value = String> {
+    prop_oneof![
+        Just("ollama".to_string()),
+        Just("bedrock".to_string()),
+        Just("openai".to_string()),
+        Just("anthropic".to_string()),
+        Just("gemini".to_string()),
+        Just("llamaapi".to_string()),
+    ]
+}
+
 fn arb_agent_init_arm() -> impl Strategy<Value = Content> {
-    (arb_text(), arb_model_provider()).prop_map(|(timezone, model_provider)| {
-        typed(
-            Kind::Request,
-            MessageType::AgentInit,
-            AgentInitPayload {
-                timezone,
-                language: "en".to_string(),
-                model_provider,
-                ollama_model: String::new(),
-                ollama_host: String::new(),
-                bedrock_model_id: None,
-            },
-        )
-    })
+    (arb_text(), arb_model_provider(), arb_backend(), arb_text()).prop_map(
+        |(timezone, model_provider, backend, model_id)| {
+            typed(
+                Kind::Request,
+                MessageType::AgentInit,
+                AgentInitPayload {
+                    timezone,
+                    language: "en".to_string(),
+                    model_provider,
+                    backend,
+                    model_id,
+                    host: None,
+                },
+            )
+        },
+    )
 }
 
 fn arb_agent_init_ack_arm() -> impl Strategy<Value = Content> {
