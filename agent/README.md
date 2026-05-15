@@ -1,18 +1,19 @@
 # agent
 
-Paquete Python del agente. Construido sobre [Strands Agents](https://strandsagents.com) y
-[strands-agents-tools](https://github.com/strands-agents/tools). Se comunica con la TUI Rust
-por un canal IPC de líneas JSON sobre stdio.
+Python agent package. Built on [Strands Agents](https://strandsagents.com) and
+[strands-agents-tools](https://github.com/strands-agents/tools). Communicates with the Rust TUI
+over a JSON Lines IPC channel on stdio.
 
-## Instalación de desarrollo
+## Development setup
 
 ```bash
 pip install -e "./agent[dev]"
 pytest agent/tests/
 ```
 
-## Módulos
+## Modules
 
-- `ipc.py` — envelope `TypedDict` y `StdioClient`
-- `storage_tools.py` — herramientas `@tool` que proxean al almacén SQLite
-- `main.py` — construcción del agente Strands y bucle de turno
+- `ipc.py` — envelope `TypedDict` and `StdioClient`
+- `storage_tools.py` — `@tool` functions that proxy to the SQLite storage
+- `locale.py` — locale loader (TOML-based i18n)
+- `main.py` — Strands Agent construction and turn loop

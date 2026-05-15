@@ -256,6 +256,7 @@ fn arb_agent_init_arm() -> impl Strategy<Value = Content> {
             MessageType::AgentInit,
             AgentInitPayload {
                 timezone,
+                language: "en".to_string(),
                 model_provider,
                 ollama_model: String::new(),
                 ollama_host: String::new(),

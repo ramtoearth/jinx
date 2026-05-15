@@ -1,7 +1,5 @@
 """Agent main loop — wires Strands Agent with storage tools and runs the
 turn loop over the Canal_IPC.
-
-Tasks 7.3–7.5 (Requisitos 5.1, 5.2, 5.3, 9.3, 9.4, 12.3).
 """
 
 from __future__ import annotations
@@ -17,43 +15,18 @@ from agent.ipc import (
     StdioClient,
     StorageError,
 )
+from agent.locale import load as load_locale
 from agent.storage_tools import set_client
 from strands_tools import current_time, editor, file_read, file_write, think  # type: ignore[import]
 
 _BUILTIN_TOOLS = [current_time, file_read, file_write, editor, think]
 
 # ---------------------------------------------------------------------------
-# System prompt template
-# ---------------------------------------------------------------------------
-
-_SYSTEM_PROMPT = """\
-Eres jinx, un asistente personal de terminal.
-Ayudas al usuario a gestionar sus Tareas, Eventos y Grupos usando herramientas.
-Cuando el usuario te pregunte quién eres o cómo te llamas, responde que eres jinx.
-
-Reglas importantes:
-- NOW = la fecha/hora ISO 8601 indicada al inicio del mensaje del usuario (línea "[NOW: ...]").
-  Usa ese valor como referencia para cualquier expresión temporal relativa.
-- Cuando el usuario mencione fechas relativas ("hoy", "mañana", "en dos horas", "el viernes"),
-  convierte siempre a una fecha/hora absoluta en ISO 8601 antes de llamar a cualquier herramienta.
-- Si no puedes resolver de forma unívoca una referencia temporal, pide aclaración antes de persistir.
-- Sólo llamas a herramientas de almacenamiento con valores absolutos, nunca con referencias relativas.
-- Responde siempre en el idioma del usuario.
-
-Reglas de Grupos:
-- Asigna group_id SOLO si el usuario menciona explícitamente un grupo por nombre.
-  Si no lo menciona, omite group_id (null). Nunca preguntes al usuario por el grupo.
-- NUNCA adivines ni inventes un group_id. SIEMPRE llama a find_group_by_name(nombre)
-  para resolver el nombre del grupo a su ID antes de usarlo en create_task o create_event.
-- Si find_group_by_name devuelve None, pregunta al usuario si quiere crear el grupo.
-- La búsqueda de grupo es case-insensitive: "Trabajo", "trabajo" y "TRABAJO" son el mismo grupo.
-"""
-
-# ---------------------------------------------------------------------------
 # Agent setup
 # ---------------------------------------------------------------------------
 
 def _build_agent(
+    system_prompt: str,
     model_provider: str = "local",
     ollama_model: str = "llama3.2:3b",
     ollama_host: str = "http://localhost:11434",
@@ -75,9 +48,9 @@ def _build_agent(
             model_id=ollama_model,
             host=ollama_host,
             max_tokens=4096,
-            temperature=0,        # deterministic — required for reliable tool calling
+            temperature=0,
             options={
-                "num_ctx": 8192,  # enough context for 22 tool schemas + conversation
+                "num_ctx": 8192,
             },
         )
     else:
@@ -85,7 +58,7 @@ def _build_agent(
             from strands.models import BedrockModel  # type: ignore[import]
             model = BedrockModel(model_id=bedrock_model_id)
         else:
-            model = None  # Strands usa el modelo Bedrock por defecto
+            model = None
 
     tools = _BUILTIN_TOOLS + [
         st.list_tasks,
@@ -110,12 +83,10 @@ def _build_agent(
     import json as _json
 
     def _stderr_callback(**kwargs: Any) -> None:
-        # Streaming text → stderr (visible in /tmp/tui_agent.log)
         chunk = kwargs.get("data", "")
         if chunk:
             sys.stderr.write(chunk)
             sys.stderr.flush()
-        # Tool call start → log name and arguments for debugging
         tool = kwargs.get("current_tool_use")
         if tool:
             name = tool.get("name", "?")
@@ -124,7 +95,7 @@ def _build_agent(
             sys.stderr.flush()
 
     agent = Agent(
-        system_prompt=_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         model=model,
         tools=tools,
         callback_handler=_stderr_callback,
@@ -159,6 +130,7 @@ def main(
 
     # Wait for agent_init
     model_provider = "local"
+    language = "en"
     ollama_model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
     ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     bedrock_model_id: str | None = os.environ.get("BEDROCK_MODEL_ID")
@@ -168,8 +140,7 @@ def main(
         if msg_type == "agent_init":
             payload = env.get("payload") or {}
             model_provider = payload.get("model_provider", model_provider)
-            # Config-file values from TUI take precedence; env vars are fallback for
-            # power users / CI running the agent directly without the TUI.
+            language = payload.get("language", language)
             ollama_model = payload.get("ollama_model") or ollama_model
             ollama_host = payload.get("ollama_host") or ollama_host
             bedrock_model_id = payload.get("bedrock_model_id") or bedrock_model_id
@@ -177,16 +148,19 @@ def main(
         if msg_type == "shutdown":
             return
 
+    # Load locale
+    loc = load_locale(language)
+    agent_loc = loc.get("agent", {})
+
     # Send agent_init_ack
     provider_notice: str | None = None
     if model_provider == "local":
-        provider_notice = f"Agente usando Ollama local ({ollama_model}). Sin envío de datos a la nube."
+        template = agent_loc.get("provider_notice_local", "")
+        provider_notice = template.replace("{model}", ollama_model)
     elif model_provider == "remote":
         bedrock_name = bedrock_model_id or "default"
-        provider_notice = (
-            f"Agente usando Amazon Bedrock ({bedrock_name}). "
-            "Los mensajes del chat se envían a un servicio externo."
-        )
+        template = agent_loc.get("provider_notice_remote", "")
+        provider_notice = template.replace("{model}", bedrock_name)
 
     ack: Envelope = {
         "v": PROTOCOL_VERSION,
@@ -197,7 +171,9 @@ def main(
     }
     client.write_envelope(ack)
 
+    system_prompt = agent_loc.get("system_prompt", "")
     agent = _build_agent(
+        system_prompt=system_prompt,
         model_provider=model_provider,
         ollama_model=ollama_model,
         ollama_host=ollama_host,
@@ -226,11 +202,13 @@ def main(
 
         try:
             response = agent(contextualized)
-            reply_text = str(response)  # AgentResult.__str__ returns accumulated assistant text
+            reply_text = str(response)
         except StorageError as e:
-            reply_text = f"No he podido completar la operación: {e.message}"
+            template = agent_loc.get("error_operation_failed", "Error: {error}")
+            reply_text = template.replace("{error}", e.message)
         except Exception as e:
-            reply_text = f"Ha ocurrido un error inesperado: {e}"
+            template = agent_loc.get("error_unexpected", "Error: {error}")
+            reply_text = template.replace("{error}", str(e))
 
         reply: Envelope = {
             "v": PROTOCOL_VERSION,
