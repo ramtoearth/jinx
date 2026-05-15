@@ -109,7 +109,13 @@ def _group_dto() -> st.SearchStrategy[dict]:  # type: ignore[type-arg]
 _PAYLOADS = st.one_of(
     # lifecycle
     st.fixed_dictionaries({"text": _TEXT}),
-    st.fixed_dictionaries({"timezone": _TEXT, "model_provider": st.sampled_from(["local", "remote"])}),
+    st.fixed_dictionaries({
+        "timezone": _TEXT,
+        "model_provider": st.sampled_from(["local", "remote"]),
+        "backend": st.sampled_from(["ollama", "bedrock", "openai", "anthropic", "gemini", "llamaapi"]),
+        "model_id": _TEXT,
+        "language": st.sampled_from(["en", "es"]),
+    }),
     st.fixed_dictionaries({"provider_notice": st.one_of(st.none(), _TEXT)}),
     st.fixed_dictionaries({"tool": _TEXT, "phase": st.sampled_from(["start", "end"])}),
     # tasks

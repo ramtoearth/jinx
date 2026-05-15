@@ -272,20 +272,20 @@ pub struct AgentReplyPayload {
     pub text: String,
 }
 
-/// Payload of `agent_init` (TUI → Agente).
+/// Payload of `agent_init` (TUI → Agent).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentInitPayload {
     pub timezone: String,
     #[serde(default = "default_language")]
     pub language: String,
     pub model_provider: ModelProvider,
-    /// Ollama model ID (only used when `model_provider = local`).
-    pub ollama_model: String,
-    /// Ollama server URL (only used when `model_provider = local`).
-    pub ollama_host: String,
-    /// Amazon Bedrock model ID (only used when `model_provider = remote`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bedrock_model_id: Option<String>,
+    /// Backend identifier: "ollama", "bedrock", "openai", "anthropic", "google", "llamaapi".
+    pub backend: String,
+    /// Model ID for the active backend.
+    pub model_id: String,
+    /// Host URL (only relevant for ollama).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 fn default_language() -> String {

@@ -20,10 +20,20 @@ Reglas de Grupos:
   para resolver el nombre del grupo a su ID antes de usarlo en create_task o create_event.
 - Si find_group_by_name devuelve None, pregunta al usuario si quiere crear el grupo.
 - La búsqueda de grupo es case-insensitive: "Trabajo", "trabajo" y "TRABAJO" son el mismo grupo.
+
+Reglas de respuesta:
+- Después de completar cualquier llamada a herramienta, SIEMPRE responde al usuario confirmando lo que hiciste. Nunca termines tu turno en silencio.
+- Mantén las confirmaciones cortas y naturales (ej. "Listo, tarea creada para mañana a las 3pm.").
 """
 
 provider_notice_local = "Agente usando Ollama local ({model}). Sin envío de datos a la nube."
 provider_notice_remote = "Agente usando Amazon Bedrock ({model}). Los mensajes del chat se envían a un servicio externo."
+provider_notice_bedrock = "Agente usando Amazon Bedrock ({model}). Los mensajes se envían a AWS."
+provider_notice_openai = "Agente usando OpenAI ({model}). Los mensajes se envían a OpenAI."
+provider_notice_anthropic = "Agente usando Anthropic ({model}). Los mensajes se envían a Anthropic."
+provider_notice_gemini = "Agente usando Gemini ({model}). Los mensajes se envían a Google."
+provider_notice_llamaapi = "Agente usando LlamaAPI ({model}). Los mensajes se envían a LlamaAPI."
+error_missing_api_key = "La variable de entorno {env_var} no está configurada. Configúrala y reinicia jinx."
 
 error_operation_failed = "No he podido completar la operación: {error}"
 error_unexpected = "Ha ocurrido un error inesperado: {error}"
