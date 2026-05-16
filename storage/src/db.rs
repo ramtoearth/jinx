@@ -79,6 +79,33 @@ static MIGRATIONS: &[&str] = &[
     DROP TABLE groups;
     ALTER TABLE groups_new RENAME TO groups;
     "#,
+    // Migration 5: Google Calendar sync metadata on events.
+    r#"
+    ALTER TABLE events ADD COLUMN google_event_id TEXT;
+    ALTER TABLE events ADD COLUMN google_etag TEXT;
+    ALTER TABLE events ADD COLUMN push_pending INTEGER NOT NULL DEFAULT 0;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_google_id
+        ON events(google_event_id) WHERE google_event_id IS NOT NULL;
+    "#,
+    // Migration 6: Google Calendar sync metadata on tasks.
+    r#"
+    ALTER TABLE tasks ADD COLUMN google_event_id TEXT;
+    ALTER TABLE tasks ADD COLUMN google_etag TEXT;
+    ALTER TABLE tasks ADD COLUMN push_pending INTEGER NOT NULL DEFAULT 0;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_google_id
+        ON tasks(google_event_id) WHERE google_event_id IS NOT NULL;
+    "#,
+    // Migration 7: sync state for incremental pull from Google.
+    r#"
+    CREATE TABLE IF NOT EXISTS sync_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        calendar_sync_token TEXT,
+        tasks_last_sync TEXT
+    );
+    INSERT OR IGNORE INTO sync_state (id) VALUES (1);
+    "#,
 ];
 
 fn apply_migrations(conn: &Connection) -> Result<(), StorageError> {
@@ -148,6 +175,7 @@ impl SqliteStorage {
 fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let priority_str: String = row.get(2)?;
     let status_str: String = row.get(3)?;
+    let push_pending_int: i32 = row.get(8)?;
     Ok(Task {
         id: row.get(0)?,
         title: row.get(1)?,
@@ -156,10 +184,13 @@ fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         created_at: row.get(4)?,
         deadline: row.get(5)?,
         group_id: row.get(6)?,
+        google_event_id: row.get(7)?,
+        push_pending: push_pending_int != 0,
     })
 }
 
 fn map_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
+    let push_pending_int: i32 = row.get(7)?;
     Ok(Event {
         id: row.get(0)?,
         title: row.get(1)?,
@@ -167,6 +198,8 @@ fn map_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
         start_time: row.get(3)?,
         duration_minutes: row.get(4)?,
         group_id: row.get(5)?,
+        google_event_id: row.get(6)?,
+        push_pending: push_pending_int != 0,
     })
 }
 
@@ -270,7 +303,7 @@ impl Storage for SqliteStorage {
 
         // Order: alta < media < baja (alphabetical descends, use CASE)
         let sql = format!(
-            "SELECT id, title, priority, status, created_at, deadline, group_id
+            "SELECT id, title, priority, status, created_at, deadline, group_id, google_event_id, push_pending
              FROM tasks
              {where_clause}
              ORDER BY
@@ -423,7 +456,7 @@ impl Storage for SqliteStorage {
         };
 
         let sql = format!(
-            "SELECT id, title, start_date, start_time, duration_minutes, group_id
+            "SELECT id, title, start_date, start_time, duration_minutes, group_id, google_event_id, push_pending
              FROM events
              {where_clause}
              ORDER BY start_date ASC, start_time ASC"
@@ -706,6 +739,63 @@ impl Storage for SqliteStorage {
     fn import_sqlite(&self, source_path: &std::path::Path) -> Result<(), StorageError> {
         crate::export::import_sqlite(self, source_path)
     }
+
+    fn mark_push_pending(&self, event_id: i64) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE events SET push_pending = 1 WHERE id = ?1",
+            params![event_id],
+        )
+        .map_err(StorageError::from)?;
+        Ok(())
+    }
+
+    fn mark_task_push_pending(&self, task_id: i64) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET push_pending = 1 WHERE id = ?1",
+            params![task_id],
+        )
+        .map_err(StorageError::from)?;
+        Ok(())
+    }
+
+    fn mark_all_push_pending(&self) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(
+            "UPDATE events SET push_pending = 1; UPDATE tasks SET push_pending = 1;"
+        )
+        .map_err(|e| StorageError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    fn get_google_event_id(&self, event_id: i64) -> Result<Option<String>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let result: Option<String> = conn
+            .query_row(
+                "SELECT google_event_id FROM events WHERE id = ?1",
+                params![event_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StorageError::from)?
+            .flatten();
+        Ok(result)
+    }
+
+    fn get_task_google_event_id(&self, task_id: i64) -> Result<Option<String>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let result: Option<String> = conn
+            .query_row(
+                "SELECT google_event_id FROM tasks WHERE id = ?1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StorageError::from)?
+            .flatten();
+        Ok(result)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -715,7 +805,7 @@ impl Storage for SqliteStorage {
 impl SqliteStorage {
     fn get_task_by_id(&self, conn: &Connection, id: i64) -> Result<Task, StorageError> {
         conn.query_row(
-            "SELECT id, title, priority, status, created_at, deadline, group_id
+            "SELECT id, title, priority, status, created_at, deadline, group_id, google_event_id, push_pending
              FROM tasks WHERE id=?1",
             params![id],
             map_task,
@@ -727,7 +817,7 @@ impl SqliteStorage {
 
     fn get_event_by_id(&self, conn: &Connection, id: i64) -> Result<Event, StorageError> {
         conn.query_row(
-            "SELECT id, title, start_date, start_time, duration_minutes, group_id
+            "SELECT id, title, start_date, start_time, duration_minutes, group_id, google_event_id, push_pending
              FROM events WHERE id=?1",
             params![id],
             map_event,

@@ -230,6 +230,10 @@ pub enum MessageType {
     StorageExportMarkdown,
     #[serde(rename = "storage.export_sqlite")]
     StorageExportSqlite,
+
+    // --- Storage: sync ----------------------------------------------------
+    #[serde(rename = "storage.sync_google")]
+    StorageSyncGoogle,
 }
 
 // ---------------------------------------------------------------------------

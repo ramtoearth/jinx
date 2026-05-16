@@ -150,6 +150,8 @@ mod tests {
             created_at: "2025-01-01T00:00:00+00:00".to_string(),
             deadline: deadline.map(|s| s.to_string()),
             group_id: None,
+            google_event_id: None,
+            push_pending: false,
         }
     }
 
@@ -161,6 +163,8 @@ mod tests {
             start_time: time.to_string(),
             duration_minutes: None,
             group_id: None,
+            google_event_id: None,
+            push_pending: false,
         }
     }
 

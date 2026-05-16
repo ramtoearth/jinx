@@ -115,6 +115,7 @@ def _build_agent(
         st.delete_group,
         st.export_markdown,
         st.export_sqlite,
+        st.sync_google,
     ]
 
     import json as _json
