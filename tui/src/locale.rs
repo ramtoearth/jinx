@@ -64,6 +64,7 @@ pub struct FormLabels {
     pub bedrock_model: String,
     pub backend: String,
     pub model: String,
+    pub google_calendar: String,
     pub date: String,
     pub datetime: String,
     pub from_date: String,

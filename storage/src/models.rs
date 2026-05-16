@@ -126,6 +126,8 @@ pub struct Task {
     /// ISO 8601 timestamp with timezone offset; `None` when no deadline.
     pub deadline: Option<String>,
     pub group_id: Option<i64>,
+    pub google_event_id: Option<String>,
+    pub push_pending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +140,8 @@ pub struct Event {
     pub start_time: String,
     pub duration_minutes: Option<u32>,
     pub group_id: Option<i64>,
+    pub google_event_id: Option<String>,
+    pub push_pending: bool,
 }
 
 // ---------------------------------------------------------------------------

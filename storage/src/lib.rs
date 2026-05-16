@@ -54,4 +54,10 @@ pub trait Storage {
     fn export_markdown(&self, output_path: &std::path::Path) -> Result<PathBuf, StorageError>;
     fn export_sqlite(&self, output_path: &std::path::Path) -> Result<PathBuf, StorageError>;
     fn import_sqlite(&self, source_path: &std::path::Path) -> Result<(), StorageError>;
+
+    fn mark_push_pending(&self, event_id: i64) -> Result<(), StorageError>;
+    fn mark_task_push_pending(&self, task_id: i64) -> Result<(), StorageError>;
+    fn mark_all_push_pending(&self) -> Result<(), StorageError>;
+    fn get_google_event_id(&self, event_id: i64) -> Result<Option<String>, StorageError>;
+    fn get_task_google_event_id(&self, task_id: i64) -> Result<Option<String>, StorageError>;
 }

@@ -37,6 +37,8 @@ fn arb_task(id: i64) -> impl Strategy<Value = Task> {
             created_at: "2025-01-01T00:00:00+00:00".to_string(),
             deadline,
             group_id: None,
+            google_event_id: None,
+            push_pending: false,
         })
 }
 
@@ -49,6 +51,8 @@ fn arb_event(id: i64) -> impl Strategy<Value = Event> {
             start_time,
             duration_minutes: None,
             group_id: None,
+            google_event_id: None,
+            push_pending: false,
         })
 }
 
@@ -165,6 +169,8 @@ fn arb_tasks() -> impl Strategy<Value = Vec<Task>> {
                         None
                     },
                     group_id: None,
+                    google_event_id: None,
+                    push_pending: false,
                 }
             }).collect()
         })
@@ -181,6 +187,8 @@ fn arb_events_unique() -> impl Strategy<Value = Vec<Event>> {
                 start_time,
                 duration_minutes: None,
                 group_id: None,
+                google_event_id: None,
+                push_pending: false,
             }).collect()
         })
 }
