@@ -2518,6 +2518,24 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
             state.pending_request = None;
             state.app.status_bar = state.locale.status.ready.clone();
         }
+        MessageType::StorageSyncGoogle => {
+            // Trigger push + pull via sync daemon
+            send_sync_command(state, "{\"command\":\"sync\"}");
+            send_sync_command(state, "{\"command\":\"pull\"}");
+
+            let response = Envelope::new(
+                Kind::Response,
+                MessageType::StorageSyncGoogle,
+                &serde_json::json!({"status": "Sync triggered."}),
+            ).unwrap().with_ref(env.id);
+            if let Some(ref mut stdin) = state.agent_stdin {
+                if let Ok(line) = serde_json::to_string(&response) {
+                    let _ = stdin.write_all(line.as_bytes());
+                    let _ = stdin.write_all(b"\n");
+                    let _ = stdin.flush();
+                }
+            }
+        }
         mt if is_storage_message_type(mt) => {
             // For deletes, capture the google ID and kind before the storage op
             let pre_delete_info: Option<(String, &str)> = match mt {
