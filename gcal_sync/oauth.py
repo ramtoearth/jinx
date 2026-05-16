@@ -44,7 +44,10 @@ def run(token_path: str | None = None) -> None:
         _reply_error(f"OAuth credentials not found at {creds_file}")
         return
 
-    scopes = ["https://www.googleapis.com/auth/calendar"]
+    scopes = [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/tasks",
+    ]
 
     try:
         flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), scopes)

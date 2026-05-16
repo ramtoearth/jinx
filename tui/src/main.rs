@@ -2477,19 +2477,21 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
             state.app.status_bar = state.locale.status.ready.clone();
         }
         mt if is_storage_message_type(mt) => {
-            // For deletes, capture the google_event_id before the storage op
-            let pre_delete_google_id = match mt {
+            // For deletes, capture the google ID and kind before the storage op
+            let pre_delete_info: Option<(String, &str)> = match mt {
                 MessageType::StorageDeleteEvent => {
                     env.payload_as::<jinx::ipc::StorageDeleteEventRequest>()
                         .ok()
                         .flatten()
                         .and_then(|req| state.storage.get_google_event_id(req.id).ok().flatten())
+                        .map(|id| (id, "event"))
                 }
                 MessageType::StorageDeleteTask => {
                     env.payload_as::<jinx::ipc::StorageDeleteTaskRequest>()
                         .ok()
                         .flatten()
                         .and_then(|req| state.storage.get_task_google_event_id(req.id).ok().flatten())
+                        .map(|id| (id, "task"))
                 }
                 _ => None,
             };
@@ -2508,10 +2510,11 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
                     let _ = state.storage.mark_task_push_pending(task_id);
                     needs_sync = true;
                 }
-                if let Some(google_event_id) = pre_delete_google_id {
+                if let Some((google_id, kind)) = pre_delete_info {
                     let cmd = serde_json::json!({
                         "command": "delete",
-                        "google_event_id": google_event_id
+                        "google_event_id": google_id,
+                        "kind": kind
                     });
                     send_sync_command(state, &cmd.to_string());
                     needs_sync = false; // delete already sent

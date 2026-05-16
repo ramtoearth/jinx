@@ -1,12 +1,14 @@
 """Sync daemon entry point.
 
 Spawned by the TUI as a subprocess. Reads commands from stdin (JSON lines),
-pushes pending events to Google Calendar, writes status to stdout.
+pushes pending events to Google Calendar and tasks to Google Tasks,
+writes status to stdout.
 
 Commands:
-  {"command": "sync"}                  — trigger immediate push
-  {"command": "delete", "google_event_id": "..."}  — delete from Google
-  {"command": "stop"}                  — graceful shutdown
+  {"command": "sync"}                                          — trigger immediate push
+  {"command": "delete", "google_event_id": "...", "kind": "event"}  — delete event from Calendar
+  {"command": "delete", "google_event_id": "...", "kind": "task"}   — delete task from Google Tasks
+  {"command": "stop"}                                          — graceful shutdown
 """
 
 from __future__ import annotations
@@ -15,18 +17,19 @@ import argparse
 import json
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import Any
+
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/tasks",
+]
 
 
 def _load_credentials(token_path: Path) -> Any:
     from google.oauth2.credentials import Credentials  # type: ignore[import]
 
-    creds = Credentials.from_authorized_user_file(
-        str(token_path),
-        scopes=["https://www.googleapis.com/auth/calendar"],
-    )
+    creds = Credentials.from_authorized_user_file(str(token_path), scopes=SCOPES)
     if creds.expired and creds.refresh_token:
         from google.auth.transport.requests import Request  # type: ignore[import]
 
@@ -36,10 +39,12 @@ def _load_credentials(token_path: Path) -> Any:
     return creds
 
 
-def _build_service(creds: Any) -> Any:
+def _build_services(creds: Any) -> tuple[Any, Any]:
     from googleapiclient.discovery import build  # type: ignore[import]
 
-    return build("calendar", "v3", credentials=creds)
+    calendar_service = build("calendar", "v3", credentials=creds)
+    tasks_service = build("tasks", "v1", credentials=creds)
+    return calendar_service, tasks_service
 
 
 def _write_status(state: str, **extra: Any) -> None:
@@ -67,13 +72,13 @@ def main() -> None:
 
     try:
         creds = _load_credentials(token_path)
-        service = _build_service(creds)
+        calendar_service, tasks_service = _build_services(creds)
     except Exception as e:
         _write_status("error", message=str(e))
         return
 
     from gcal_sync.db import connect
-    from gcal_sync.sync import delete_from_google, push_pending
+    from gcal_sync.sync import delete_event_from_google, delete_task_from_google, push_pending
 
     conn = connect(args.db)
     _write_status("idle")
@@ -95,19 +100,23 @@ def main() -> None:
                 stop_event.set()
                 return
             elif command == "sync":
-                do_sync(service, conn, args.calendar_id, args.timezone)
+                do_sync()
             elif command == "delete":
                 gid = cmd.get("google_event_id")
+                kind = cmd.get("kind", "event")
                 if gid:
-                    delete_from_google(service, args.calendar_id, gid)
+                    if kind == "task":
+                        delete_task_from_google(tasks_service, gid)
+                    else:
+                        delete_event_from_google(calendar_service, args.calendar_id, gid)
         stop_event.set()
 
-    def do_sync(
-        svc: Any, db_conn: Any, calendar_id: str, timezone: str
-    ) -> None:
+    def do_sync() -> None:
         _write_status("syncing")
         try:
-            pushed = push_pending(svc, db_conn, calendar_id, timezone)
+            pushed = push_pending(
+                calendar_service, tasks_service, conn, args.calendar_id, args.timezone
+            )
             _write_status("done", pushed=pushed)
         except Exception as e:
             _write_status("error", message=str(e))
@@ -115,8 +124,7 @@ def main() -> None:
     reader_thread = threading.Thread(target=stdin_reader, daemon=True)
     reader_thread.start()
 
-    # Initial sync
-    do_sync(service, conn, args.calendar_id, args.timezone)
+    do_sync()
 
     stop_event.wait()
     conn.close()

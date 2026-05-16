@@ -1,4 +1,4 @@
-"""Core push logic: jinx events and tasks → Google Calendar."""
+"""Core push logic: jinx events → Google Calendar, jinx tasks → Google Tasks."""
 
 from __future__ import annotations
 
@@ -14,8 +14,7 @@ from gcal_sync.db import (
     mark_task_synced,
 )
 
-PRIORITY_EMOJI = {"alta": "🔴", "media": "🟡", "baja": "🟢"}
-STATUS_LABEL = {"pendiente": "pending", "completada": "done", "cancelada": "cancelled"}
+PRIORITY_LABEL = {"alta": "High", "media": "Medium", "baja": "Low"}
 
 
 def to_google_event(event: PendingEvent, timezone: str) -> dict[str, Any]:
@@ -39,64 +38,35 @@ def to_google_event(event: PendingEvent, timezone: str) -> dict[str, Any]:
     }
 
 
-def task_to_google_event(task: PendingTask, timezone: str) -> dict[str, Any]:
-    """Convert a jinx task to a Google Calendar event body."""
-    priority = PRIORITY_EMOJI.get(task.priority, "")
-    status = STATUS_LABEL.get(task.status, task.status)
-    summary = f"[Task{' ' + priority if priority else ''}] {task.title}"
+def task_to_google_task(task: PendingTask) -> dict[str, Any]:
+    """Convert a jinx task to a Google Tasks body."""
+    body: dict[str, Any] = {"title": task.title}
 
     if task.deadline:
-        # Parse deadline — ISO 8601 with timezone offset
         dl = task.deadline
-        try:
-            if "T" in dl:
-                # Has time component: "2026-05-16T14:00:00+00:00"
-                dt = datetime.datetime.fromisoformat(dl)
-                end_dt = dt + datetime.timedelta(hours=1)
-                return {
-                    "summary": summary,
-                    "description": f"Status: {status}",
-                    "start": {"dateTime": dt.isoformat(), "timeZone": timezone},
-                    "end": {"dateTime": end_dt.isoformat(), "timeZone": timezone},
-                }
-            else:
-                # Date only: "2026-05-16"
-                return {
-                    "summary": summary,
-                    "description": f"Status: {status}",
-                    "start": {"date": dl},
-                    "end": {"date": dl},
-                }
-        except (ValueError, TypeError):
-            pass
+        if "T" in dl:
+            dt = datetime.datetime.fromisoformat(dl)
+            body["due"] = dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        else:
+            body["due"] = f"{dl}T00:00:00.000Z"
 
-    # No deadline — use created_at date as all-day event
-    created_date = task.created_at[:10] if len(task.created_at) >= 10 else None
-    if created_date:
-        return {
-            "summary": summary,
-            "description": f"Status: {status}",
-            "start": {"date": created_date},
-            "end": {"date": created_date},
-        }
+    if task.status == "completada":
+        body["status"] = "completed"
+    else:
+        body["status"] = "needsAction"
 
-    # Fallback: today
-    today = datetime.date.today().isoformat()
-    return {
-        "summary": summary,
-        "description": f"Status: {status}",
-        "start": {"date": today},
-        "end": {"date": today},
-    }
+    priority = PRIORITY_LABEL.get(task.priority, task.priority)
+    body["notes"] = f"Priority: {priority}"
+
+    return body
 
 
-def _push_item(
+def _push_calendar_event(
     service: Any,
     calendar_id: str,
     body: dict[str, Any],
     google_event_id: str | None,
 ) -> dict[str, Any] | None:
-    """Insert or update a single item in Google Calendar. Returns the result."""
     try:
         if google_event_id is None:
             return (
@@ -107,11 +77,30 @@ def _push_item(
         else:
             return (
                 service.events()
-                .update(
-                    calendarId=calendar_id,
-                    eventId=google_event_id,
-                    body=body,
-                )
+                .update(calendarId=calendar_id, eventId=google_event_id, body=body)
+                .execute()
+            )
+    except Exception:
+        return None
+
+
+def _push_google_task(
+    tasks_service: Any,
+    body: dict[str, Any],
+    google_task_id: str | None,
+) -> dict[str, Any] | None:
+    try:
+        if google_task_id is None:
+            return (
+                tasks_service.tasks()
+                .insert(tasklist="@default", body=body)
+                .execute()
+            )
+        else:
+            body["id"] = google_task_id
+            return (
+                tasks_service.tasks()
+                .update(tasklist="@default", task=google_task_id, body=body)
                 .execute()
             )
     except Exception:
@@ -119,24 +108,25 @@ def _push_item(
 
 
 def push_pending(
-    service: Any,
+    calendar_service: Any,
+    tasks_service: Any,
     conn: Any,
     calendar_id: str,
     timezone: str,
 ) -> int:
-    """Push all pending events and tasks to Google Calendar. Returns count pushed."""
+    """Push pending events to Calendar and pending tasks to Google Tasks."""
     pushed = 0
 
     for event in get_pending_events(conn):
         body = to_google_event(event, timezone)
-        result = _push_item(service, calendar_id, body, event.google_event_id)
+        result = _push_calendar_event(calendar_service, calendar_id, body, event.google_event_id)
         if result:
             mark_event_synced(conn, event.id, result["id"], result.get("etag", ""))
             pushed += 1
 
     for task in get_pending_tasks(conn):
-        body = task_to_google_event(task, timezone)
-        result = _push_item(service, calendar_id, body, task.google_event_id)
+        body = task_to_google_task(task)
+        result = _push_google_task(tasks_service, body, task.google_event_id)
         if result:
             mark_task_synced(conn, task.id, result["id"], result.get("etag", ""))
             pushed += 1
@@ -144,15 +134,27 @@ def push_pending(
     return pushed
 
 
-def delete_from_google(
-    service: Any,
+def delete_event_from_google(
+    calendar_service: Any,
     calendar_id: str,
     google_event_id: str,
 ) -> bool:
-    """Delete an event from Google Calendar. Returns True on success."""
     try:
-        service.events().delete(
+        calendar_service.events().delete(
             calendarId=calendar_id, eventId=google_event_id
+        ).execute()
+        return True
+    except Exception:
+        return False
+
+
+def delete_task_from_google(
+    tasks_service: Any,
+    google_task_id: str,
+) -> bool:
+    try:
+        tasks_service.tasks().delete(
+            tasklist="@default", task=google_task_id
         ).execute()
         return True
     except Exception:
