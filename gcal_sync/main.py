@@ -1,13 +1,13 @@
 """Sync daemon entry point.
 
-Spawned by the TUI as a subprocess. Reads commands from stdin (JSON lines),
-pushes pending events to Google Calendar and tasks to Google Tasks,
-writes status to stdout.
+Spawned by the TUI as a subprocess. Handles bidirectional sync:
+- Push: jinx events → Google Calendar, jinx tasks → Google Tasks
+- Pull: Google Calendar → jinx events, Google Tasks → jinx tasks (every 5 min + on startup)
 
-Commands:
+Commands (JSON lines on stdin):
   {"command": "sync"}                                          — trigger immediate push
-  {"command": "delete", "google_event_id": "...", "kind": "event"}  — delete event from Calendar
-  {"command": "delete", "google_event_id": "...", "kind": "task"}   — delete task from Google Tasks
+  {"command": "pull"}                                          — trigger immediate pull
+  {"command": "delete", "google_event_id": "...", "kind": "event|task"} — delete from Google
   {"command": "stop"}                                          — graceful shutdown
 """
 
@@ -24,6 +24,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/tasks",
 ]
+
+POLL_INTERVAL_SECONDS = 300  # 5 minutes
 
 
 def _load_credentials(token_path: Path) -> Any:
@@ -78,12 +80,33 @@ def main() -> None:
         return
 
     from gcal_sync.db import connect
+    from gcal_sync.pull import pull_calendar, pull_tasks
     from gcal_sync.sync import delete_event_from_google, delete_task_from_google, push_pending
 
     conn = connect(args.db)
     _write_status("idle")
 
     stop_event = threading.Event()
+
+    def do_push() -> None:
+        _write_status("syncing")
+        try:
+            pushed = push_pending(
+                calendar_service, tasks_service, conn, args.calendar_id, args.timezone
+            )
+            _write_status("done", pushed=pushed)
+        except Exception as e:
+            _write_status("error", message=str(e))
+
+    def do_pull() -> None:
+        _write_status("syncing")
+        try:
+            pulled = 0
+            pulled += pull_calendar(calendar_service, conn, args.calendar_id, args.timezone)
+            pulled += pull_tasks(tasks_service, conn)
+            _write_status("done", pulled=pulled)
+        except Exception as e:
+            _write_status("error", message=str(e))
 
     def stdin_reader() -> None:
         for line in sys.stdin:
@@ -100,7 +123,9 @@ def main() -> None:
                 stop_event.set()
                 return
             elif command == "sync":
-                do_sync()
+                do_push()
+            elif command == "pull":
+                do_pull()
             elif command == "delete":
                 gid = cmd.get("google_event_id")
                 kind = cmd.get("kind", "event")
@@ -111,20 +136,20 @@ def main() -> None:
                         delete_event_from_google(calendar_service, args.calendar_id, gid)
         stop_event.set()
 
-    def do_sync() -> None:
-        _write_status("syncing")
-        try:
-            pushed = push_pending(
-                calendar_service, tasks_service, conn, args.calendar_id, args.timezone
-            )
-            _write_status("done", pushed=pushed)
-        except Exception as e:
-            _write_status("error", message=str(e))
+    def background_poll() -> None:
+        while not stop_event.wait(timeout=POLL_INTERVAL_SECONDS):
+            do_pull()
 
     reader_thread = threading.Thread(target=stdin_reader, daemon=True)
     reader_thread.start()
 
-    do_sync()
+    # Initial push + pull on startup
+    do_push()
+    do_pull()
+
+    # Start background polling (every 5 minutes)
+    poll_thread = threading.Thread(target=background_poll, daemon=True)
+    poll_thread.start()
 
     stop_event.wait()
     conn.close()

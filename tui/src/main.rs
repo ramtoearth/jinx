@@ -69,6 +69,7 @@ const GCAL_INIT:        &str = include_str!("../../gcal_sync/__init__.py");
 const GCAL_MAIN:        &str = include_str!("../../gcal_sync/main.py");
 const GCAL_OAUTH:       &str = include_str!("../../gcal_sync/oauth.py");
 const GCAL_SYNC:        &str = include_str!("../../gcal_sync/sync.py");
+const GCAL_PULL:        &str = include_str!("../../gcal_sync/pull.py");
 const GCAL_DB:          &str = include_str!("../../gcal_sync/db.py");
 const GCAL_CREDENTIALS: &str = include_str!("../../gcal_sync/credentials.json");
 
@@ -115,6 +116,7 @@ fn extract_agent() -> std::path::PathBuf {
     write_if_changed(&gcal_dir.join("main.py"),           GCAL_MAIN);
     write_if_changed(&gcal_dir.join("oauth.py"),          GCAL_OAUTH);
     write_if_changed(&gcal_dir.join("sync.py"),           GCAL_SYNC);
+    write_if_changed(&gcal_dir.join("pull.py"),           GCAL_PULL);
     write_if_changed(&gcal_dir.join("db.py"),             GCAL_DB);
     write_if_changed(&gcal_dir.join("credentials.json"),  GCAL_CREDENTIALS);
 
@@ -1125,13 +1127,14 @@ fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyE
         }
         KeyCode::Char('c') => {
             if let Some(t) = tasks.get(state.task_cursor) {
+                let task_id = t.id;
                 let new_status = if t.status == TaskStatus::Completada {
                     TaskStatus::Pendiente
                 } else {
                     TaskStatus::Completada
                 };
                 match state.storage.update_task(
-                    t.id,
+                    task_id,
                     TaskPatch { status: Some(new_status), ..Default::default() },
                 ) {
                     Ok(_) => {
@@ -1140,6 +1143,7 @@ fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyE
                         } else {
                             state.locale.status.task_pending.clone()
                         };
+                        notify_sync_task_changed(state, task_id);
                     }
                     Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
                 }
@@ -1269,14 +1273,15 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
         KeyCode::Char('c') => {
             if let Some(entry) = nth_entry(&flat, state.calendar_cursor) {
                 if entry.is_task {
-                    let task = tasks.iter().find(|t| t.id == entry.entity_id);
+                    let task_id = entry.entity_id;
+                    let task = tasks.iter().find(|t| t.id == task_id);
                     let new_status = if task.map(|t| t.status) == Some(TaskStatus::Completada) {
                         TaskStatus::Pendiente
                     } else {
                         TaskStatus::Completada
                     };
                     match state.storage.update_task(
-                        entry.entity_id,
+                        task_id,
                         TaskPatch { status: Some(new_status), ..Default::default() },
                     ) {
                         Ok(_) => {
@@ -1285,6 +1290,7 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                             } else {
                                 state.locale.status.task_pending.clone()
                             };
+                            notify_sync_task_changed(state, task_id);
                         }
                         Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
                     }
@@ -1776,12 +1782,14 @@ fn handle_modal_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         Some(Modal::NewEvent) | Some(Modal::EditEvent { .. }) => handle_event_form_key(state, key),
         Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => handle_group_form_key(state, key),
         Some(Modal::DeleteTask { id }) => handle_delete_key(state, key, |s| {
+            notify_sync_task_deleted(s, id);
             match s.storage.delete_task(id) {
                 Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.task_deleted.clone(); if s.task_cursor > 0 { s.task_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
         Some(Modal::DeleteEvent { id }) => handle_delete_key(state, key, |s| {
+            notify_sync_event_deleted(s, id);
             match s.storage.delete_event(id) {
                 Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.event_deleted.clone(); if s.calendar_cursor > 0 { s.calendar_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
@@ -1934,28 +1942,29 @@ fn save_task(state: &mut RuntimeState) {
         state.groups_cache.get(form.group_idx - 1).map(|g| g.id)
     };
 
-    let result: Result<_, _> = if let Some(id) = form.edit_id {
+    let result = if let Some(id) = form.edit_id {
         state.storage.update_task(id, TaskPatch {
             title: Some(form.title.trim().to_string()),
             priority: Some(priority),
             deadline: Some(deadline),
             group_id: Some(group_id),
             status: Some(statuses[form.status_idx]),
-        }).map(|_| ())
+        }).map(|t| t.id)
     } else {
         state.storage.create_task(NewTask {
             title: form.title.trim().to_string(),
             priority: Some(priority),
             deadline,
             group_id,
-        }).map(|_| ())
+        }).map(|t| t.id)
     };
 
     match result {
-        Ok(()) => {
+        Ok(task_id) => {
             state.app.modal = None;
             state.task_form = TaskFormState::default();
             state.app.status_bar = state.locale.status.task_saved.clone();
+            notify_sync_task_changed(state, task_id);
         }
         Err(e) => state.task_form.error = Some(e.message()),
     }
@@ -1985,14 +1994,14 @@ fn save_event(state: &mut RuntimeState) {
         state.groups_cache.get(form.group_idx - 1).map(|g| g.id)
     };
 
-    let result: Result<_, _> = if let Some(id) = form.edit_id {
+    let result = if let Some(id) = form.edit_id {
         state.storage.update_event(id, EventPatch {
             title: Some(form.title.trim().to_string()),
             start_date: Some(start_date.clone()),
             start_time: Some(start_time.clone()),
             duration_minutes: Some(duration_minutes),
             group_id: Some(group_id),
-        }).map(|_| ())
+        }).map(|e| e.id)
     } else {
         state.storage.create_event(NewEvent {
             title: form.title.trim().to_string(),
@@ -2000,14 +2009,15 @@ fn save_event(state: &mut RuntimeState) {
             start_time,
             duration_minutes,
             group_id,
-        }).map(|_| ())
+        }).map(|e| e.id)
     };
 
     match result {
-        Ok(()) => {
+        Ok(event_id) => {
             state.app.modal = None;
             state.event_form = EventFormState::default();
             state.app.status_bar = state.locale.status.event_saved.clone();
+            notify_sync_event_changed(state, event_id);
         }
         Err(e) => state.event_form.error = Some(e.message()),
     }
@@ -2362,6 +2372,38 @@ fn shutdown_sync_daemon(state: &mut RuntimeState) {
     state.sync_child = None;
     state.sync_rx = None;
     state.sync_status = SyncStatus::Disabled;
+}
+
+fn notify_sync_event_changed(state: &mut RuntimeState, event_id: i64) {
+    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
+        let _ = state.storage.mark_push_pending(event_id);
+        send_sync_command(state, "{\"command\":\"sync\"}");
+    }
+}
+
+fn notify_sync_task_changed(state: &mut RuntimeState, task_id: i64) {
+    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
+        let _ = state.storage.mark_task_push_pending(task_id);
+        send_sync_command(state, "{\"command\":\"sync\"}");
+    }
+}
+
+fn notify_sync_event_deleted(state: &mut RuntimeState, event_id: i64) {
+    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
+        if let Ok(Some(gid)) = state.storage.get_google_event_id(event_id) {
+            let cmd = serde_json::json!({"command": "delete", "google_event_id": gid, "kind": "event"});
+            send_sync_command(state, &cmd.to_string());
+        }
+    }
+}
+
+fn notify_sync_task_deleted(state: &mut RuntimeState, task_id: i64) {
+    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
+        if let Ok(Some(gid)) = state.storage.get_task_google_event_id(task_id) {
+            let cmd = serde_json::json!({"command": "delete", "google_event_id": gid, "kind": "task"});
+            send_sync_command(state, &cmd.to_string());
+        }
+    }
 }
 
 fn send_sync_command(state: &mut RuntimeState, cmd: &str) {

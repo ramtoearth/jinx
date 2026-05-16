@@ -97,6 +97,15 @@ static MIGRATIONS: &[&str] = &[
     CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_google_id
         ON tasks(google_event_id) WHERE google_event_id IS NOT NULL;
     "#,
+    // Migration 7: sync state for incremental pull from Google.
+    r#"
+    CREATE TABLE IF NOT EXISTS sync_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        calendar_sync_token TEXT,
+        tasks_last_sync TEXT
+    );
+    INSERT OR IGNORE INTO sync_state (id) VALUES (1);
+    "#,
 ];
 
 fn apply_migrations(conn: &Connection) -> Result<(), StorageError> {
