@@ -2076,14 +2076,12 @@ fn handle_group_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
         KeyCode::Right if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
             state.group_form.color_idx = (state.group_form.color_idx + 1) % COLOR_PRESETS.len();
         }
-        KeyCode::Left => match state.group_form.field {
-            0 => { state.group_form.name.move_left(); }
-            _ => {}
-        },
-        KeyCode::Right => match state.group_form.field {
-            0 => { state.group_form.name.move_right(); }
-            _ => {}
-        },
+        KeyCode::Left if state.group_form.field == 0 => {
+            state.group_form.name.move_left();
+        }
+        KeyCode::Right if state.group_form.field == 0 => {
+            state.group_form.name.move_right();
+        }
         KeyCode::Char(c) => match state.group_form.field {
             0 => { state.group_form.name.insert_char(c); }
             1 => { state.group_form.color_custom.push(c); }
