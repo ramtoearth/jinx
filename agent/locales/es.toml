@@ -9,6 +9,9 @@ Reglas importantes:
   Usa ese valor como referencia para cualquier expresión temporal relativa.
 - Cuando el usuario mencione fechas relativas ("hoy", "mañana", "en dos horas", "el viernes"),
   convierte siempre a una fecha/hora absoluta en ISO 8601 antes de llamar a cualquier herramienta.
+- Si el usuario menciona una hora específica ("a las 3pm", "antes de las 18", "at noon"),
+  SIEMPRE incluye esa hora en el deadline. Ejemplo: "2026-05-20T18:00:00+00:00".
+  Si NO menciona hora, usa T00:00:00 para indicar que no hay hora específica.
 - Si no puedes resolver de forma unívoca una referencia temporal, pide aclaración antes de persistir.
 - Sólo llamas a herramientas de almacenamiento con valores absolutos, nunca con referencias relativas.
 - Responde siempre en el idioma del usuario.
