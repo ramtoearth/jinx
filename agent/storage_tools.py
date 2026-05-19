@@ -111,7 +111,8 @@ def create_task(
     """Create a new task and return it.
 
     priority: "alta" | "media" | "baja"  (or English: high/medium/low)
-    deadline: ISO 8601 absolute datetime, e.g. "2026-05-08T10:00:00+00:00"
+    deadline: ISO 8601 absolute datetime with time, e.g. "2026-05-08T10:00:00+00:00".
+              Use T00:00:00 only when no specific time was mentioned by the user.
     """
     payload: Dict[str, Any] = {"title": title}
     if priority is not None:
