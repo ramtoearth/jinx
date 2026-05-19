@@ -3584,10 +3584,10 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
             } else {
                 d.to_string()
             }
-        }).unwrap_or_else(|| state.locale.hints.no_date.clone());
+        }).map(|d| format!(" ({})", d)).unwrap_or_default();
 
         let label = format!(
-            " {} {}[{}] {} ({})",
+            " {} {}[{}] {}{}",
             cursor, group_indicator, t.priority.as_str(), t.title, deadline_str
         );
 
