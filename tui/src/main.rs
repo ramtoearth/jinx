@@ -312,6 +312,7 @@ enum DateInputResult {
     Consumed,
     NextField,
     PrevField,
+    Submit,
 }
 
 #[derive(Clone)]
@@ -561,6 +562,10 @@ impl DateTimeInput {
             KeyCode::BackTab => {
                 self.commit_typing_buf();
                 DateInputResult::PrevField
+            }
+            KeyCode::Enter => {
+                self.commit_typing_buf();
+                DateInputResult::Submit
             }
             _ => DateInputResult::Consumed,
         }
@@ -1557,6 +1562,10 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
                 state.filter_form.field = 3;
                 return;
             }
+            DateInputResult::Submit => {
+                apply_filter(state);
+                return;
+            }
         }
     }
     if state.filter_form.field == 5 && is_custom {
@@ -1568,6 +1577,10 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
             }
             DateInputResult::PrevField => {
                 state.filter_form.field = 4;
+                return;
+            }
+            DateInputResult::Submit => {
+                apply_filter(state);
                 return;
             }
         }
@@ -1957,6 +1970,10 @@ fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEven
                 state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields;
                 return;
             }
+            DateInputResult::Submit => {
+                save_task(state);
+                return;
+            }
         }
     }
 
@@ -1998,6 +2015,10 @@ fn handle_event_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
             }
             DateInputResult::PrevField => {
                 state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields;
+                return;
+            }
+            DateInputResult::Submit => {
+                save_event(state);
                 return;
             }
         }
