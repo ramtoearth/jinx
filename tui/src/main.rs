@@ -179,7 +179,7 @@ const COLOR_PRESETS: [&str; 16] = [
 
 #[derive(Clone)]
 struct TaskFormState {
-    title: String,
+    title: TextEditor,
     priority_idx: usize,  // 0=alta 1=media 2=baja
     deadline: DateTimeInput,
     group_idx: usize,     // 0=ninguno, 1..=N = groups_cache[idx-1]
@@ -192,9 +192,9 @@ struct TaskFormState {
 impl Default for TaskFormState {
     fn default() -> Self {
         Self {
-            title: String::new(),
+            title: TextEditor::new(),
             priority_idx: 1,
-            deadline: DateTimeInput::date_only_disabled(),
+            deadline: DateTimeInput::date_time_disabled(),
             group_idx: 0,
             status_idx: 0,
             field: 0,
@@ -206,9 +206,9 @@ impl Default for TaskFormState {
 
 #[derive(Clone)]
 struct EventFormState {
-    title: String,
+    title: TextEditor,
     datetime: DateTimeInput,
-    duration: String,     // minutes or empty
+    duration: TextEditor,
     group_idx: usize,
     field: usize,         // 0=title 1=datetime 2=duration 3=group
     edit_id: Option<i64>,
@@ -218,9 +218,9 @@ struct EventFormState {
 impl Default for EventFormState {
     fn default() -> Self {
         Self {
-            title: String::new(),
+            title: TextEditor::new(),
             datetime: DateTimeInput::date_time_now(),
-            duration: String::new(),
+            duration: TextEditor::new(),
             group_idx: 0,
             field: 0,
             edit_id: None,
@@ -229,14 +229,27 @@ impl Default for EventFormState {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct GroupFormState {
-    name: String,
+    name: TextEditor,
     color_idx: usize,     // index into COLOR_PRESETS (or custom)
     color_custom: String, // overrides preset when non-empty
     field: usize,         // 0=name 1=color
     edit_id: Option<i64>,
     error: Option<String>,
+}
+
+impl Default for GroupFormState {
+    fn default() -> Self {
+        Self {
+            name: TextEditor::new(),
+            color_idx: 0,
+            color_custom: String::new(),
+            field: 0,
+            edit_id: None,
+            error: None,
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -245,13 +258,13 @@ struct SettingsFormState {
     language_idx: usize,       // 0=English, 1=Español
     provider_idx: usize,       // 0=Local, 1=Remote
     backend_idx: usize,        // 0=Bedrock, 1=OpenAI, 2=Anthropic, 3=Gemini, 4=LlamaAPI
-    local_model_input: String,
-    host_input: String,
-    bedrock_model_input: String,
-    openai_model_input: String,
-    anthropic_model_input: String,
-    gemini_model_input: String,
-    llamaapi_model_input: String,
+    local_model_input: TextEditor,
+    host_input: TextEditor,
+    bedrock_model_input: TextEditor,
+    openai_model_input: TextEditor,
+    anthropic_model_input: TextEditor,
+    gemini_model_input: TextEditor,
+    llamaapi_model_input: TextEditor,
     gcal_enabled: bool,
 }
 
@@ -260,7 +273,7 @@ struct FilterFormState {
     status_idx: usize,    // 0=pendiente, 1=todas, 2=completada, 3=cancelada
     priority_idx: usize,  // 0=todas, 1=alta, 2=media, 3=baja
     group_idx: usize,     // 0=todos, 1..N=grupo, N+1=sin grupo
-    date_idx: usize,      // 0=todas, 1=hoy, 2=esta semana, 3=este mes, 4=custom
+    date_idx: usize,      // 0=todas, 1=hoy, 2=ayer, 3=esta semana, 4=semana pasada, 5=este mes, 6=custom
     date_from: DateTimeInput,
     date_to: DateTimeInput,
     field: usize,         // 0=status, 1=priority, 2=group, 3=fecha, 4=desde, 5=hasta
@@ -298,6 +311,7 @@ impl GroupFormState {
 enum DateInputResult {
     Consumed,
     NextField,
+    PrevField,
 }
 
 #[derive(Clone)]
@@ -324,6 +338,21 @@ impl DateTimeInput {
             minute: 0,
             segment: 0,
             has_time: false,
+            enabled: false,
+            typing_buf: String::new(),
+        }
+    }
+
+    fn date_time_disabled() -> Self {
+        let now = chrono::Local::now();
+        Self {
+            year: now.format("%Y").to_string().parse().unwrap_or(2026),
+            month: now.format("%m").to_string().parse().unwrap_or(1),
+            day: now.format("%d").to_string().parse().unwrap_or(1),
+            hour: now.format("%H").to_string().parse().unwrap_or(0),
+            minute: now.format("%M").to_string().parse().unwrap_or(0),
+            segment: 0,
+            has_time: true,
             enabled: false,
             typing_buf: String::new(),
         }
@@ -529,6 +558,10 @@ impl DateTimeInput {
                 self.commit_typing_buf();
                 DateInputResult::NextField
             }
+            KeyCode::BackTab => {
+                self.commit_typing_buf();
+                DateInputResult::PrevField
+            }
             _ => DateInputResult::Consumed,
         }
     }
@@ -705,6 +738,9 @@ struct RuntimeState {
     chat_history: Vec<ChatMsg>,
     chat_editor: TextEditor,
     chat_scroll: usize, // lines from bottom; 0 = pinned to bottom
+    prompt_history: Vec<String>,
+    prompt_history_idx: Option<usize>,
+    prompt_stash: String,
     task_cursor: usize,
     tareas_scroll: usize,
     tareas_search_active: bool,
@@ -712,6 +748,7 @@ struct RuntimeState {
     calendar_cursor: usize,
     calendar_scroll: usize,
     calendar_scroll_initialized: bool,
+    calendar_filter_idx: usize, // 0=all, 1=today, 2=this week, 3=this month
     group_cursor: usize,
     tareas_section: TareasSection,
     tareas_filter: ActiveTaskFilter,
@@ -759,6 +796,9 @@ fn run_app(
         chat_history: Vec::new(),
         chat_editor: TextEditor::new(),
         chat_scroll: 0,
+        prompt_history: Vec::new(),
+        prompt_history_idx: None,
+        prompt_stash: String::new(),
         task_cursor: 0,
         tareas_scroll: 0,
         tareas_search_active: false,
@@ -766,6 +806,7 @@ fn run_app(
         calendar_cursor: 0,
         calendar_scroll: 0,
         calendar_scroll_initialized: false,
+        calendar_filter_idx: 0,
         group_cursor: 0,
         tareas_section: TareasSection::default(),
         tareas_filter: ActiveTaskFilter::default(),
@@ -907,6 +948,9 @@ fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
                 state.app.status_bar = state.locale.errors.empty_message.clone();
                 return;
             }
+            state.prompt_history.push(trimmed.clone());
+            state.prompt_history_idx = None;
+            state.prompt_stash.clear();
             state.chat_history.push(ChatMsg { role: ChatRole::User, text: trimmed.clone() });
             state.chat_editor.clear();
             state.chat_scroll = 0;
@@ -923,9 +967,32 @@ fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
             state.chat_scroll = state.chat_scroll.saturating_sub(3);
         }
-        // Navigation
+        // Navigation — Up/Down: history recall when single-line, else cursor movement
         KeyCode::Left => state.chat_editor.move_left(),
         KeyCode::Right => state.chat_editor.move_right(),
+        KeyCode::Up if state.chat_editor.line_count() == 1 => {
+            if state.prompt_history.is_empty() { return; }
+            let idx = match state.prompt_history_idx {
+                None => {
+                    state.prompt_stash = state.chat_editor.to_string();
+                    state.prompt_history.len() - 1
+                }
+                Some(0) => return,
+                Some(i) => i - 1,
+            };
+            state.prompt_history_idx = Some(idx);
+            state.chat_editor = TextEditor::from_string(&state.prompt_history[idx]);
+        }
+        KeyCode::Down if state.chat_editor.line_count() == 1 && state.prompt_history_idx.is_some() => {
+            let idx = state.prompt_history_idx.unwrap();
+            if idx + 1 >= state.prompt_history.len() {
+                state.prompt_history_idx = None;
+                state.chat_editor = TextEditor::from_string(&state.prompt_stash);
+            } else {
+                state.prompt_history_idx = Some(idx + 1);
+                state.chat_editor = TextEditor::from_string(&state.prompt_history[idx + 1]);
+            }
+        }
         KeyCode::Up => state.chat_editor.move_up(),
         KeyCode::Down => state.chat_editor.move_down(),
         // Readline shortcuts
@@ -1026,7 +1093,10 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
                 Panel::Calendario => {
                     let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
                     let events = state.storage.list_events(None, None).unwrap_or_default();
-                    let view = jinx::calendario::calendar_layout(&tasks, &events);
+                    let mut view = jinx::calendario::calendar_layout(&tasks, &events);
+                    if let Some((from, to)) = calendar_date_range(state.calendar_filter_idx) {
+                        view.retain(|date, _| date.as_str() >= from.as_str() && date.as_str() <= to.as_str());
+                    }
                     let flat = flat_entries(&view);
                     let count = entry_count(&flat);
                     if state.calendar_cursor + 1 < count { state.calendar_cursor += 1; }
@@ -1059,27 +1129,20 @@ fn handle_modal_paste(state: &mut RuntimeState, data: &str) {
     let clean: String = data.chars().filter(|&c| c != '\n' && c != '\r').collect();
     match &state.app.modal {
         Some(Modal::NewTask) | Some(Modal::EditTask { .. })
-            if state.task_form.field == 0 => { state.task_form.title.push_str(&clean); }
+            if state.task_form.field == 0 => { for c in clean.chars() { state.task_form.title.insert_char(c); } }
         Some(Modal::NewEvent) | Some(Modal::EditEvent { .. }) => match state.event_form.field {
-            0 => state.event_form.title.push_str(&clean),
-            2 => state.event_form.duration.push_str(&clean),
+            0 => { for c in clean.chars() { state.event_form.title.insert_char(c); } }
+            2 => { for c in clean.chars() { state.event_form.duration.insert_char(c); } }
             _ => {}
         },
         Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => match state.group_form.field {
-            0 => state.group_form.name.push_str(&clean),
+            0 => { for c in clean.chars() { state.group_form.name.insert_char(c); } }
             1 => state.group_form.color_custom.push_str(&clean),
             _ => {}
         },
         Some(Modal::Settings) => {
-            let is_local = state.settings_form.provider_idx == 0;
-            if is_local {
-                match state.settings_form.field {
-                    2 => state.settings_form.local_model_input.push_str(&clean),
-                    3 => state.settings_form.host_input.push_str(&clean),
-                    _ => {}
-                }
-            } else if state.settings_form.field == 3 {
-                active_remote_model(&mut state.settings_form).push_str(&clean);
+            if let Some(ed) = settings_active_editor(state) {
+                for c in clean.chars() { ed.insert_char(c); }
             }
         }
         _ => {}
@@ -1249,7 +1312,10 @@ fn get_filtered_tasks(state: &RuntimeState) -> Vec<storage::Task> {
 fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
     let events = state.storage.list_events(None, None).unwrap_or_default();
-    let view = jinx::calendario::calendar_layout(&tasks, &events);
+    let mut view = jinx::calendario::calendar_layout(&tasks, &events);
+    if let Some((from, to)) = calendar_date_range(state.calendar_filter_idx) {
+        view.retain(|date, _| date.as_str() >= from.as_str() && date.as_str() <= to.as_str());
+    }
     let flat = flat_entries(&view);
     let count = entry_count(&flat);
 
@@ -1307,6 +1373,12 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                 }
             }
         }
+        KeyCode::Char('f') => {
+            state.calendar_filter_idx = (state.calendar_filter_idx + 1) % 4;
+            state.calendar_cursor = 0;
+            state.calendar_scroll = 0;
+            state.calendar_scroll_initialized = false;
+        }
         _ => {}
     }
 }
@@ -1344,11 +1416,11 @@ fn open_edit_task_modal(state: &mut RuntimeState, id: i64) {
             .and_then(|gid| state.groups_cache.iter().position(|g| g.id == gid).map(|p| p + 1))
             .unwrap_or(0);
         let deadline = match &t.deadline {
-            Some(s) => DateTimeInput::from_iso(s, false),
-            None => DateTimeInput::date_only_disabled(),
+            Some(s) => DateTimeInput::from_iso(s, true),
+            None => DateTimeInput::date_time_disabled(),
         };
         state.task_form = TaskFormState {
-            title: t.title.clone(),
+            title: TextEditor::from_string(&t.title),
             priority_idx,
             deadline,
             group_idx,
@@ -1374,10 +1446,11 @@ fn open_edit_event_modal(state: &mut RuntimeState, id: i64) {
         let group_idx = ev.group_id
             .and_then(|gid| state.groups_cache.iter().position(|g| g.id == gid).map(|p| p + 1))
             .unwrap_or(0);
+        let dur_str = ev.duration_minutes.map(|d| d.to_string()).unwrap_or_default();
         state.event_form = EventFormState {
-            title: ev.title.clone(),
+            title: TextEditor::from_string(&ev.title),
             datetime: DateTimeInput::from_date_time_strings(&ev.start_date, &ev.start_time),
-            duration: ev.duration_minutes.map(|d| d.to_string()).unwrap_or_default(),
+            duration: TextEditor::from_string(&dur_str),
             group_idx,
             field: 0,
             edit_id: Some(id),
@@ -1403,7 +1476,7 @@ fn open_edit_group_modal(state: &mut RuntimeState, id: i64) {
             color_str
         };
         state.group_form = GroupFormState {
-            name: g.name.clone(),
+            name: TextEditor::from_string(&g.name),
             color_idx,
             color_custom,
             edit_id: Some(id),
@@ -1419,20 +1492,26 @@ fn open_filter_modal(state: &mut RuntimeState) {
         (None, None) => (0, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled()),
         (Some(f), Some(t)) => {
             let today = today_str();
+            let yesterday = yesterday_str();
             let (wk_m, wk_s) = week_bounds();
+            let (lw_m, lw_s) = last_week_bounds();
             let (mo_f, mo_l) = month_bounds();
             if f == &today && t == &today {
                 (1, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
-            } else if f == &wk_m && t == &wk_s {
+            } else if f == &yesterday && t == &yesterday {
                 (2, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
-            } else if f == &mo_f && t == &mo_l {
+            } else if f == &wk_m && t == &wk_s {
                 (3, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+            } else if f == &lw_m && t == &lw_s {
+                (4, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+            } else if f == &mo_f && t == &mo_l {
+                (5, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
             } else {
-                (4, DateTimeInput::from_iso(f, false), DateTimeInput::from_iso(t, false))
+                (6, DateTimeInput::from_iso(f, false), DateTimeInput::from_iso(t, false))
             }
         }
-        (Some(f), None) => (4, DateTimeInput::from_iso(f, false), DateTimeInput::date_only_disabled()),
-        (None, Some(t)) => (4, DateTimeInput::date_only_disabled(), DateTimeInput::from_iso(t, false)),
+        (Some(f), None) => (6, DateTimeInput::from_iso(f, false), DateTimeInput::date_only_disabled()),
+        (None, Some(t)) => (6, DateTimeInput::date_only_disabled(), DateTimeInput::from_iso(t, false)),
     };
     state.filter_form = FilterFormState {
         status_idx: match state.tareas_filter.status {
@@ -1464,7 +1543,7 @@ fn open_filter_modal(state: &mut RuntimeState) {
 
 fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let n_groups = state.groups_cache.len();
-    let is_custom = state.filter_form.date_idx == 4;
+    let is_custom = state.filter_form.date_idx == 6;
     let n_fields: usize = if is_custom { 6 } else { 4 };
 
     if state.filter_form.field == 4 && is_custom {
@@ -1474,6 +1553,10 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
                 state.filter_form.field = 5;
                 return;
             }
+            DateInputResult::PrevField => {
+                state.filter_form.field = 3;
+                return;
+            }
         }
     }
     if state.filter_form.field == 5 && is_custom {
@@ -1481,6 +1564,10 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
             DateInputResult::Consumed => return,
             DateInputResult::NextField => {
                 state.filter_form.field = 0;
+                return;
+            }
+            DateInputResult::PrevField => {
+                state.filter_form.field = 4;
                 return;
             }
         }
@@ -1502,7 +1589,7 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
                 let n = n_groups + 2;
                 state.filter_form.group_idx = (state.filter_form.group_idx + n - 1) % n;
             }
-            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 4) % 5,
+            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 6) % 7,
             _ => {}
         },
         KeyCode::Right => match state.filter_form.field {
@@ -1512,7 +1599,7 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
                 let n = n_groups + 2;
                 state.filter_form.group_idx = (state.filter_form.group_idx + 1) % n;
             }
-            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 1) % 5,
+            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 1) % 7,
             _ => {}
         },
         KeyCode::Char('r') => {
@@ -1527,7 +1614,7 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
         _ => {}
     }
 
-    if state.filter_form.date_idx == 4 {
+    if state.filter_form.date_idx == 6 {
         state.filter_form.date_from.enabled = true;
         state.filter_form.date_to.enabled = true;
     }
@@ -1535,6 +1622,12 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
 
 fn today_str() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn yesterday_str() -> String {
+    (chrono::Local::now() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 fn week_bounds() -> (String, String) {
@@ -1545,6 +1638,18 @@ fn week_bounds() -> (String, String) {
     (
         monday.format("%Y-%m-%d").to_string(),
         sunday.format("%Y-%m-%d").to_string(),
+    )
+}
+
+fn last_week_bounds() -> (String, String) {
+    let now = chrono::Local::now();
+    let weekday = now.format("%u").to_string().parse::<i64>().unwrap_or(1);
+    let this_monday = now - chrono::Duration::days(weekday - 1);
+    let last_monday = this_monday - chrono::Duration::days(7);
+    let last_sunday = last_monday + chrono::Duration::days(6);
+    (
+        last_monday.format("%Y-%m-%d").to_string(),
+        last_sunday.format("%Y-%m-%d").to_string(),
     )
 }
 
@@ -1584,9 +1689,11 @@ fn apply_filter(state: &mut RuntimeState) {
     let (from_date, to_date) = match form.date_idx {
         0 => (None, None),
         1 => { let t = today_str(); (Some(t.clone()), Some(t)) }
-        2 => { let (m, s) = week_bounds(); (Some(m), Some(s)) }
-        3 => { let (f, l) = month_bounds(); (Some(f), Some(l)) }
-        4 => (form.date_from.to_date_string(), form.date_to.to_date_string()),
+        2 => { let y = yesterday_str(); (Some(y.clone()), Some(y)) }
+        3 => { let (m, s) = week_bounds(); (Some(m), Some(s)) }
+        4 => { let (m, s) = last_week_bounds(); (Some(m), Some(s)) }
+        5 => { let (f, l) = month_bounds(); (Some(f), Some(l)) }
+        6 => (form.date_from.to_date_string(), form.date_to.to_date_string()),
         _ => (None, None),
     };
     state.tareas_filter.from_date = from_date;
@@ -1611,13 +1718,13 @@ fn open_settings_modal(state: &mut RuntimeState) {
         language_idx: if cfg.language == "es" { 1 } else { 0 },
         provider_idx: if cfg.provider == app_config::Provider::Local { 0 } else { 1 },
         backend_idx,
-        local_model_input: cfg.local.model.clone(),
-        host_input: cfg.local.host.clone(),
-        bedrock_model_input: cfg.remote.bedrock_model.clone(),
-        openai_model_input: cfg.remote.openai_model.clone(),
-        anthropic_model_input: cfg.remote.anthropic_model.clone(),
-        gemini_model_input: cfg.remote.gemini_model.clone(),
-        llamaapi_model_input: cfg.remote.llamaapi_model.clone(),
+        local_model_input: TextEditor::from_string(&cfg.local.model),
+        host_input: TextEditor::from_string(&cfg.local.host),
+        bedrock_model_input: TextEditor::from_string(&cfg.remote.bedrock_model),
+        openai_model_input: TextEditor::from_string(&cfg.remote.openai_model),
+        anthropic_model_input: TextEditor::from_string(&cfg.remote.anthropic_model),
+        gemini_model_input: TextEditor::from_string(&cfg.remote.gemini_model),
+        llamaapi_model_input: TextEditor::from_string(&cfg.remote.llamaapi_model),
         gcal_enabled: cfg.google_calendar.enabled,
         field: 0,
     };
@@ -1626,13 +1733,31 @@ fn open_settings_modal(state: &mut RuntimeState) {
 
 const N_BACKENDS: usize = 5;
 
-fn active_remote_model(form: &mut SettingsFormState) -> &mut String {
+fn active_remote_model(form: &mut SettingsFormState) -> &mut TextEditor {
     match form.backend_idx {
         0 => &mut form.bedrock_model_input,
         1 => &mut form.openai_model_input,
         2 => &mut form.anthropic_model_input,
         3 => &mut form.gemini_model_input,
         _ => &mut form.llamaapi_model_input,
+    }
+}
+
+fn settings_is_text_field(field: usize, is_local: bool) -> bool {
+    match field {
+        2 if is_local => true,
+        3 => true,
+        _ => false,
+    }
+}
+
+fn settings_active_editor(state: &mut RuntimeState) -> Option<&mut TextEditor> {
+    let is_local = state.settings_form.provider_idx == 0;
+    match state.settings_form.field {
+        2 if is_local => Some(&mut state.settings_form.local_model_input),
+        3 if is_local => Some(&mut state.settings_form.host_input),
+        3 => Some(active_remote_model(&mut state.settings_form)),
+        _ => None,
     }
 }
 
@@ -1663,27 +1788,20 @@ fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::Key
         KeyCode::Left | KeyCode::Right if state.settings_form.field == 4 => {
             state.settings_form.gcal_enabled = !state.settings_form.gcal_enabled;
         }
-        KeyCode::Char(c) => {
-            if is_local {
-                match state.settings_form.field {
-                    2 => state.settings_form.local_model_input.push(c),
-                    3 => state.settings_form.host_input.push(c),
-                    _ => {}
-                }
-            } else if state.settings_form.field == 3 {
-                active_remote_model(&mut state.settings_form).push(c);
-            }
+        KeyCode::Left if settings_is_text_field(state.settings_form.field, is_local) => {
+            if let Some(ed) = settings_active_editor(state) { ed.move_left(); }
         }
-        KeyCode::Backspace => {
-            if is_local {
-                match state.settings_form.field {
-                    2 => { state.settings_form.local_model_input.pop(); }
-                    3 => { state.settings_form.host_input.pop(); }
-                    _ => {}
-                }
-            } else if state.settings_form.field == 3 {
-                active_remote_model(&mut state.settings_form).pop();
-            }
+        KeyCode::Right if settings_is_text_field(state.settings_form.field, is_local) => {
+            if let Some(ed) = settings_active_editor(state) { ed.move_right(); }
+        }
+        KeyCode::Char(c) if settings_is_text_field(state.settings_form.field, is_local) => {
+            if let Some(ed) = settings_active_editor(state) { ed.insert_char(c); }
+        }
+        KeyCode::Backspace if settings_is_text_field(state.settings_form.field, is_local) => {
+            if let Some(ed) = settings_active_editor(state) { ed.backspace(); }
+        }
+        KeyCode::Delete if settings_is_text_field(state.settings_form.field, is_local) => {
+            if let Some(ed) = settings_active_editor(state) { ed.delete(); }
         }
         KeyCode::Enter => save_settings(state),
         KeyCode::Esc => state.app.modal = None,
@@ -1714,23 +1832,26 @@ fn save_settings(state: &mut RuntimeState) {
         },
         local: app_config::LocalConfig {
             model: {
-                let m = form.local_model_input.trim();
+                let m = form.local_model_input.to_string();
+                let m = m.trim();
                 if m.is_empty() { defaults.local.model } else { m.to_string() }
             },
             host: {
-                let h = form.host_input.trim();
+                let h = form.host_input.to_string();
+                let h = h.trim();
                 if h.is_empty() { defaults.local.host } else { h.to_string() }
             },
         },
         remote: {
             let d = &defaults.remote;
-            let or_default = |input: &str, fallback: &str| {
-                let trimmed = input.trim();
-                if trimmed.is_empty() { fallback.to_string() } else { trimmed.to_string() }
+            let or_default = |input: &TextEditor, fallback: &str| {
+                let s = input.to_string();
+                let trimmed = s.trim().to_string();
+                if trimmed.is_empty() { fallback.to_string() } else { trimmed }
             };
             app_config::RemoteConfig {
                 backend,
-                bedrock_model: form.bedrock_model_input.trim().to_string(),
+                bedrock_model: form.bedrock_model_input.to_string().trim().to_string(),
                 openai_model: or_default(&form.openai_model_input, &d.openai_model),
                 anthropic_model: or_default(&form.anthropic_model_input, &d.anthropic_model),
                 gemini_model: or_default(&form.gemini_model_input, &d.gemini_model),
@@ -1832,6 +1953,10 @@ fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEven
                 state.task_form.field = (state.task_form.field + 1) % n_fields;
                 return;
             }
+            DateInputResult::PrevField => {
+                state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields;
+                return;
+            }
         }
     }
 
@@ -1839,19 +1964,22 @@ fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEven
         KeyCode::Tab => state.task_form.field = (state.task_form.field + 1) % n_fields,
         KeyCode::BackTab => state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields,
         KeyCode::Left => match state.task_form.field {
+            0 => { state.task_form.title.move_left(); }
             1 => state.task_form.priority_idx = (state.task_form.priority_idx + 2) % 3,
             3 => { let n = state.groups_cache.len() + 1; state.task_form.group_idx = (state.task_form.group_idx + n - 1) % n; }
             4 => state.task_form.status_idx = (state.task_form.status_idx + 2) % 3,
             _ => {}
         },
         KeyCode::Right => match state.task_form.field {
+            0 => { state.task_form.title.move_right(); }
             1 => state.task_form.priority_idx = (state.task_form.priority_idx + 1) % 3,
             3 => { let n = state.groups_cache.len() + 1; state.task_form.group_idx = (state.task_form.group_idx + 1) % n; }
             4 => state.task_form.status_idx = (state.task_form.status_idx + 1) % 3,
             _ => {}
         },
-        KeyCode::Char(c) if state.task_form.field == 0 => { state.task_form.title.push(c); }
-        KeyCode::Backspace if state.task_form.field == 0 => { state.task_form.title.pop(); }
+        KeyCode::Char(c) if state.task_form.field == 0 => { state.task_form.title.insert_char(c); }
+        KeyCode::Backspace if state.task_form.field == 0 => { state.task_form.title.backspace(); }
+        KeyCode::Delete if state.task_form.field == 0 => { state.task_form.title.delete(); }
         KeyCode::Enter => save_task(state),
         KeyCode::Esc => { state.app.modal = None; state.task_form.error = None; }
         _ => {}
@@ -1868,6 +1996,10 @@ fn handle_event_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                 state.event_form.field = (state.event_form.field + 1) % n_fields;
                 return;
             }
+            DateInputResult::PrevField => {
+                state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields;
+                return;
+            }
         }
     }
 
@@ -1882,14 +2014,29 @@ fn handle_event_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + 1) % n;
         }
+        KeyCode::Left => match state.event_form.field {
+            0 => { state.event_form.title.move_left(); }
+            2 => { state.event_form.duration.move_left(); }
+            _ => {}
+        },
+        KeyCode::Right => match state.event_form.field {
+            0 => { state.event_form.title.move_right(); }
+            2 => { state.event_form.duration.move_right(); }
+            _ => {}
+        },
         KeyCode::Char(c) => match state.event_form.field {
-            0 => state.event_form.title.push(c),
-            2 => state.event_form.duration.push(c),
+            0 => { state.event_form.title.insert_char(c); }
+            2 => { state.event_form.duration.insert_char(c); }
             _ => {}
         },
         KeyCode::Backspace => match state.event_form.field {
-            0 => { state.event_form.title.pop(); }
-            2 => { state.event_form.duration.pop(); }
+            0 => { state.event_form.title.backspace(); }
+            2 => { state.event_form.duration.backspace(); }
+            _ => {}
+        },
+        KeyCode::Delete => match state.event_form.field {
+            0 => { state.event_form.title.delete(); }
+            2 => { state.event_form.duration.delete(); }
             _ => {}
         },
         KeyCode::Enter => save_event(state),
@@ -1908,16 +2055,25 @@ fn handle_group_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
         KeyCode::Right if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
             state.group_form.color_idx = (state.group_form.color_idx + 1) % COLOR_PRESETS.len();
         }
+        KeyCode::Left => match state.group_form.field {
+            0 => { state.group_form.name.move_left(); }
+            _ => {}
+        },
+        KeyCode::Right => match state.group_form.field {
+            0 => { state.group_form.name.move_right(); }
+            _ => {}
+        },
         KeyCode::Char(c) => match state.group_form.field {
-            0 => state.group_form.name.push(c),
+            0 => { state.group_form.name.insert_char(c); }
             1 => { state.group_form.color_custom.push(c); }
             _ => {}
         },
         KeyCode::Backspace => match state.group_form.field {
-            0 => { state.group_form.name.pop(); }
+            0 => { state.group_form.name.backspace(); }
             1 => { state.group_form.color_custom.pop(); }
             _ => {}
         },
+        KeyCode::Delete if state.group_form.field == 0 => { state.group_form.name.delete(); }
         KeyCode::Enter => save_group(state),
         KeyCode::Esc => { state.app.modal = None; state.group_form.error = None; }
         _ => {}
@@ -1930,7 +2086,8 @@ fn handle_group_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
 
 fn save_task(state: &mut RuntimeState) {
     let form = state.task_form.clone();
-    if form.title.trim().is_empty() {
+    let title_text = form.title.to_string();
+    if title_text.trim().is_empty() {
         state.task_form.error = Some(state.locale.errors.title_empty.clone());
         return;
     }
@@ -1944,7 +2101,7 @@ fn save_task(state: &mut RuntimeState) {
 
     let result = if let Some(id) = form.edit_id {
         state.storage.update_task(id, TaskPatch {
-            title: Some(form.title.trim().to_string()),
+            title: Some(title_text.trim().to_string()),
             priority: Some(priority),
             deadline: Some(deadline),
             group_id: Some(group_id),
@@ -1952,7 +2109,7 @@ fn save_task(state: &mut RuntimeState) {
         }).map(|t| t.id)
     } else {
         state.storage.create_task(NewTask {
-            title: form.title.trim().to_string(),
+            title: title_text.trim().to_string(),
             priority: Some(priority),
             deadline,
             group_id,
@@ -1972,7 +2129,9 @@ fn save_task(state: &mut RuntimeState) {
 
 fn save_event(state: &mut RuntimeState) {
     let form = state.event_form.clone();
-    if form.title.trim().is_empty() {
+    let title_text = form.title.to_string();
+    let duration_text = form.duration.to_string();
+    if title_text.trim().is_empty() {
         state.event_form.error = Some(state.locale.errors.title_empty.clone());
         return;
     }
@@ -1982,10 +2141,10 @@ fn save_event(state: &mut RuntimeState) {
         state.event_form.error = Some(state.locale.errors.start_date_required.clone());
         return;
     }
-    let duration_minutes: Option<u32> = if form.duration.trim().is_empty() {
+    let duration_minutes: Option<u32> = if duration_text.trim().is_empty() {
         None
     } else {
-        match form.duration.trim().parse::<u32>() {
+        match duration_text.trim().parse::<u32>() {
             Ok(d) => Some(d),
             Err(_) => { state.event_form.error = Some(state.locale.errors.duration_integer.clone()); return; }
         }
@@ -1996,7 +2155,7 @@ fn save_event(state: &mut RuntimeState) {
 
     let result = if let Some(id) = form.edit_id {
         state.storage.update_event(id, EventPatch {
-            title: Some(form.title.trim().to_string()),
+            title: Some(title_text.trim().to_string()),
             start_date: Some(start_date.clone()),
             start_time: Some(start_time.clone()),
             duration_minutes: Some(duration_minutes),
@@ -2004,7 +2163,7 @@ fn save_event(state: &mut RuntimeState) {
         }).map(|e| e.id)
     } else {
         state.storage.create_event(NewEvent {
-            title: form.title.trim().to_string(),
+            title: title_text.trim().to_string(),
             start_date,
             start_time,
             duration_minutes,
@@ -2025,7 +2184,8 @@ fn save_event(state: &mut RuntimeState) {
 
 fn save_group(state: &mut RuntimeState) {
     let form = state.group_form.clone();
-    if form.name.trim().is_empty() {
+    let name_text = form.name.to_string();
+    if name_text.trim().is_empty() {
         state.group_form.error = Some(state.locale.errors.name_empty.clone());
         return;
     }
@@ -2036,11 +2196,11 @@ fn save_group(state: &mut RuntimeState) {
     };
 
     let result: Result<_, _> = if let Some(id) = form.edit_id {
-        state.storage.rename_group(id, form.name.trim().to_string())
+        state.storage.rename_group(id, name_text.trim().to_string())
             .and_then(|_| state.storage.recolor_group(id, color))
             .map(|_| ())
     } else {
-        state.storage.create_group(NewGroup { name: form.name.trim().to_string(), color }).map(|_| ())
+        state.storage.create_group(NewGroup { name: name_text.trim().to_string(), color }).map(|_| ())
     };
 
     match result {
@@ -2791,6 +2951,31 @@ fn form_line(label: &str, value: String, active: bool) -> Line<'static> {
     ])
 }
 
+fn form_line_editor(label: &str, editor: &TextEditor, active: bool) -> Line<'static> {
+    let (ls, vs) = if active {
+        (Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+         Style::default().fg(Color::Cyan))
+    } else {
+        (Style::default().fg(Color::DarkGray), Style::default())
+    };
+    let text = editor.to_string();
+    if active {
+        let col = editor.cursor_col();
+        let (before, after) = text.split_at(col.min(text.len()));
+        Line::from(vec![
+            Span::styled(format!("  {:16}", label), ls),
+            Span::styled(before.to_string(), vs),
+            Span::styled("│".to_string(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(after.to_string(), vs),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(format!("  {:16}", label), ls),
+            Span::styled(text, vs),
+        ])
+    }
+}
+
 fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let form = &state.filter_form;
     let block = Block::default()
@@ -2822,7 +3007,9 @@ fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Re
     let date_labels = [
         state.locale.filters.all.as_str(),
         state.locale.filters.today.as_str(),
+        state.locale.filters.yesterday.as_str(),
         state.locale.filters.this_week.as_str(),
+        state.locale.filters.last_week.as_str(),
         state.locale.filters.this_month.as_str(),
         state.locale.filters.custom.as_str(),
     ];
@@ -2848,7 +3035,7 @@ fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Re
         format!("← {} →", date_labels[form.date_idx]),
         form.field == 3,
     ));
-    if form.date_idx == 4 {
+    if form.date_idx == 6 {
         lines.push(date_input_line(
             state.locale.form_labels.from_date.as_str(), &form.date_from, form.field == 4,
             &state.locale.hints.date_input_inactive, &state.locale.hints.no_date, &state.locale.hints.date_input_active,
@@ -2891,7 +3078,7 @@ fn render_task_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect
         .collect();
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
-    lines.push(form_line(state.locale.form_labels.title.as_str(), form.title.clone(), form.field == 0));
+    lines.push(form_line_editor(state.locale.form_labels.title.as_str(), &form.title, form.field == 0));
     lines.push(form_line(state.locale.form_labels.priority.as_str(), format!("← {} →", priorities[form.priority_idx]), form.field == 1));
     lines.push(date_input_line(
         state.locale.form_labels.deadline.as_str(), &form.deadline, form.field == 2,
@@ -2930,12 +3117,17 @@ fn render_event_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
         .collect();
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
-    lines.push(form_line(state.locale.form_labels.title.as_str(), form.title.clone(), form.field == 0));
+    lines.push(form_line_editor(state.locale.form_labels.title.as_str(), &form.title, form.field == 0));
     lines.push(date_input_line(
         state.locale.form_labels.datetime.as_str(), &form.datetime, form.field == 1,
         &state.locale.hints.date_input_inactive, &state.locale.hints.no_date, &state.locale.hints.date_input_active,
     ));
-    lines.push(form_line(state.locale.form_labels.duration_min.as_str(), if form.duration.is_empty() { state.locale.misc.empty_duration.clone() } else { form.duration.clone() }, form.field == 2));
+    let dur_text = form.duration.to_string();
+    lines.push(form_line_editor(state.locale.form_labels.duration_min.as_str(), &form.duration, form.field == 2));
+    if form.field != 2 && dur_text.is_empty() {
+        lines.pop();
+        lines.push(form_line(state.locale.form_labels.duration_min.as_str(), state.locale.misc.empty_duration.clone(), false));
+    }
     lines.push(form_line(
         state.locale.form_labels.group.as_str(),
         format!("← {} →", groups.get(form.group_idx).map(String::as_str).unwrap_or(state.locale.filters.none.as_str())),
@@ -2971,7 +3163,7 @@ fn render_group_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rec
     };
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
-    lines.push(form_line(state.locale.form_labels.name.as_str(), form.name.clone(), form.field == 0));
+    lines.push(form_line_editor(state.locale.form_labels.name.as_str(), &form.name, form.field == 0));
     lines.push(form_line(state.locale.form_labels.color.as_str(), color_display, form.field == 1));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -3037,25 +3229,24 @@ fn render_settings_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: 
     lines.push(form_line(state.locale.form_labels.provider.as_str(), provider_label.to_string(), form.field == 1));
 
     if is_local {
-        lines.push(form_line(state.locale.form_labels.ollama_model.as_str(), form.local_model_input.clone(), form.field == 2));
-        let host_display = if form.host_input.is_empty() {
-            "http://localhost:11434".to_string()
+        lines.push(form_line_editor(state.locale.form_labels.ollama_model.as_str(), &form.local_model_input, form.field == 2));
+        if form.field == 3 || !form.host_input.is_empty() {
+            lines.push(form_line_editor(state.locale.form_labels.ollama_host.as_str(), &form.host_input, form.field == 3));
         } else {
-            form.host_input.clone()
-        };
-        lines.push(form_line(state.locale.form_labels.ollama_host.as_str(), host_display, form.field == 3));
+            lines.push(form_line(state.locale.form_labels.ollama_host.as_str(), "http://localhost:11434".to_string(), false));
+        }
     } else {
         let backend_names = ["Bedrock", "OpenAI", "Anthropic", "Gemini", "LlamaAPI"];
         let backend_label = format!("← {} →", backend_names[form.backend_idx]);
         lines.push(form_line(state.locale.form_labels.backend.as_str(), backend_label, form.field == 2));
-        let model_value = match form.backend_idx {
+        let model_editor = match form.backend_idx {
             0 => &form.bedrock_model_input,
             1 => &form.openai_model_input,
             2 => &form.anthropic_model_input,
             3 => &form.gemini_model_input,
             _ => &form.llamaapi_model_input,
         };
-        lines.push(form_line(state.locale.form_labels.model.as_str(), model_value.clone(), form.field == 3));
+        lines.push(form_line_editor(state.locale.form_labels.model.as_str(), model_editor, form.field == 3));
     }
 
     lines.push(Line::from(""));
@@ -3359,9 +3550,20 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
             "   ".to_string()
         };
 
-        let deadline_str = t.deadline.as_deref().map(|d| {
-            if let Some(pos) = d.find('T') { &d[..pos] } else { d }
-        }).unwrap_or(state.locale.hints.no_date.as_str());
+        let deadline_str: String = t.deadline.as_deref().map(|d| {
+            if let Some(pos) = d.find('T') {
+                let date = &d[..pos];
+                let time_part = &d[pos + 1..];
+                let hm: &str = if time_part.len() >= 5 { &time_part[..5] } else { time_part };
+                if hm == "00:00" {
+                    date.to_string()
+                } else {
+                    format!("{} {}", date, hm)
+                }
+            } else {
+                d.to_string()
+            }
+        }).unwrap_or_else(|| state.locale.hints.no_date.clone());
 
         let label = format!(
             " {} {}[{}] {} ({})",
@@ -3458,6 +3660,15 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
     frame.render_widget(List::new(group_items), sections[1]);
 }
 
+fn calendar_date_range(filter_idx: usize) -> Option<(String, String)> {
+    match filter_idx {
+        1 => { let t = today_str(); Some((t.clone(), t)) }
+        2 => Some(week_bounds()),
+        3 => Some(month_bounds()),
+        _ => None,
+    }
+}
+
 fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
     let block = panel_block(state.locale.panels.calendar.as_str());
     let inner = block.inner(area);
@@ -3465,12 +3676,28 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area:
 
     let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
     let events = state.storage.list_events(None, None).unwrap_or_default();
-    let view = jinx::calendario::calendar_layout(&tasks, &events);
+    let mut view = jinx::calendario::calendar_layout(&tasks, &events);
+    if let Some((from, to)) = calendar_date_range(state.calendar_filter_idx) {
+        view.retain(|date, _| date.as_str() >= from.as_str() && date.as_str() <= to.as_str());
+    }
     let flat = flat_entries(&view);
 
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let groups = state.storage.list_groups().unwrap_or_default();
     let mut lines: Vec<ListItem> = vec![];
+
+    if state.calendar_filter_idx > 0 {
+        let filter_labels = [
+            "",
+            state.locale.filters.today.as_str(),
+            state.locale.filters.this_week.as_str(),
+            state.locale.filters.this_month.as_str(),
+        ];
+        let label = format!("  [{}]", filter_labels[state.calendar_filter_idx]);
+        lines.push(ListItem::new(Line::from(Span::styled(
+            label, Style::default().fg(Color::Magenta),
+        ))));
+    }
     let mut entry_idx = 0usize;
     let mut today_line_idx: Option<usize> = None;
     let mut cursor_line_idx: usize = 0;
