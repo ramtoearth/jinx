@@ -20,8 +20,8 @@ pub use db::SqliteStorage;
 pub use error::StorageError;
 pub use export::Exporter;
 pub use models::{
-    Event, EventPatch, Group, GroupPatch, GroupsSnapshot, HexColor, NewEvent, NewGroup, NewTask,
-    Priority, Task, TaskFilter, TaskPatch, TaskStatus,
+    Event, EventPatch, Group, GroupPatch, GroupsSnapshot, HexColor, NewEvent, NewGroup, NewNote,
+    NewTask, Note, NotePatch, Priority, Task, TaskFilter, TaskPatch, TaskStatus,
 };
 pub use path::resolve_db_path;
 
@@ -54,6 +54,12 @@ pub trait Storage {
     fn export_markdown(&self, output_path: &std::path::Path) -> Result<PathBuf, StorageError>;
     fn export_sqlite(&self, output_path: &std::path::Path) -> Result<PathBuf, StorageError>;
     fn import_sqlite(&self, source_path: &std::path::Path) -> Result<(), StorageError>;
+
+    fn list_notes(&self) -> Result<Vec<Note>, StorageError>;
+    fn search_notes(&self, query: &str) -> Result<Vec<Note>, StorageError>;
+    fn create_note(&self, input: NewNote) -> Result<Note, StorageError>;
+    fn update_note(&self, id: i64, patch: NotePatch) -> Result<Note, StorageError>;
+    fn delete_note(&self, id: i64) -> Result<(), StorageError>;
 
     fn mark_push_pending(&self, event_id: i64) -> Result<(), StorageError>;
     fn mark_task_push_pending(&self, task_id: i64) -> Result<(), StorageError>;
