@@ -2981,6 +2981,11 @@ fn is_storage_message_type(mt: MessageType) -> bool {
             | MessageType::StorageDeleteGroup
             | MessageType::StorageExportMarkdown
             | MessageType::StorageExportSqlite
+            | MessageType::StorageListNotes
+            | MessageType::StorageSearchNotes
+            | MessageType::StorageCreateNote
+            | MessageType::StorageUpdateNote
+            | MessageType::StorageDeleteNote
     )
 }
 

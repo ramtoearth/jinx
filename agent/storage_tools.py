@@ -337,3 +337,58 @@ def sync_google() -> str:
     """
     result = _send("storage.sync_google")
     return result.get("status", "Sync completed.")
+
+
+# ---------------------------------------------------------------------------
+# Notes
+# ---------------------------------------------------------------------------
+
+
+@tool
+def list_notes() -> List[Dict[str, Any]]:
+    """List all notes, ordered by most recently updated first."""
+    result = _send("storage.list_notes")
+    return result.get("notes", [])
+
+
+
+@tool
+def search_notes(query: str) -> List[Dict[str, Any]]:
+    """Search notes by title or body content (case-insensitive).
+
+    Use this when the user asks if they have a note about something,
+    or wants to find a specific note by its content.
+    """
+    result = _send("storage.search_notes", {"query": query})
+    return result.get("notes", [])
+
+
+
+@tool
+def create_note(title: str, body: str = "") -> Dict[str, Any]:
+    """Create a new note with the given title and optional markdown body.
+
+    The body supports markdown formatting (headers, lists, bold, code blocks, etc.).
+    """
+    result = _send("storage.create_note", {"title": title, "body": body})
+    return result["note"]
+
+
+
+@tool
+def update_note(id: int, title: Optional[str] = None, body: Optional[str] = None) -> Dict[str, Any]:
+    """Update a note's title and/or body. Only provided fields are changed."""
+    patch: Dict[str, Any] = {}
+    if title is not None:
+        patch["title"] = title
+    if body is not None:
+        patch["body"] = body
+    result = _send("storage.update_note", {"id": id, "patch": patch})
+    return result["note"]
+
+
+
+@tool
+def delete_note(id: int) -> None:
+    """Delete a note permanently."""
+    _send("storage.delete_note", {"id": id})
