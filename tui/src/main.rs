@@ -491,15 +491,19 @@ impl DateTimeInput {
                 self.commit_typing_buf();
                 if self.segment > 0 {
                     self.segment -= 1;
+                    DateInputResult::Consumed
+                } else {
+                    DateInputResult::PrevField
                 }
-                DateInputResult::Consumed
             }
             KeyCode::Right => {
                 self.commit_typing_buf();
                 if self.segment + 1 < self.n_segments() {
                     self.segment += 1;
+                    DateInputResult::Consumed
+                } else {
+                    DateInputResult::NextField
                 }
-                DateInputResult::Consumed
             }
             KeyCode::Up => {
                 self.commit_typing_buf();
@@ -777,6 +781,7 @@ struct RuntimeState {
     filter_form: FilterFormState,
     groups_cache: Vec<Group>,
     delete_confirm_name: String,
+    pending_g: bool,
     // Layout rects for mouse hit-testing
     panel_area: Option<Rect>,
     input_area: Option<Rect>,
@@ -833,6 +838,7 @@ fn run_app(
         filter_form: FilterFormState::default(),
         groups_cache: Vec::new(),
         delete_confirm_name: String::new(),
+        pending_g: false,
         panel_area: None,
         input_area: None,
         history_area: None,
@@ -917,10 +923,12 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     // Tab / Shift-Tab cycle panels
     match key.code {
         KeyCode::Tab if key.modifiers == KeyModifiers::NONE => {
+            state.pending_g = false;
             state.app = jinx::app::reduce(state.app.clone(), AppEvent::Key(key));
             return;
         }
         KeyCode::BackTab => {
+            state.pending_g = false;
             state.app = jinx::app::reduce(state.app.clone(), AppEvent::Key(key));
             return;
         }
@@ -1161,6 +1169,7 @@ fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) 
     }
 
     if key.code == KeyCode::Char('s') {
+        state.pending_g = false;
         state.tareas_section = match state.tareas_section {
             TareasSection::Tasks => TareasSection::Groups,
             TareasSection::Groups => TareasSection::Tasks,
@@ -1180,11 +1189,18 @@ fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyE
     } else {
         get_filtered_tasks(state)
     };
+    if state.pending_g {
+        state.pending_g = false;
+        if key.code == KeyCode::Char('g') {
+            state.task_cursor = 0;
+            return;
+        }
+    }
     match key.code {
-        KeyCode::Up if state.task_cursor > 0 => {
+        KeyCode::Up | KeyCode::Char('k') if state.task_cursor > 0 => {
             state.task_cursor -= 1;
         }
-        KeyCode::Down if state.task_cursor + 1 < tasks.len() => {
+        KeyCode::Down | KeyCode::Char('j') if state.task_cursor + 1 < tasks.len() => {
             state.task_cursor += 1;
         }
         KeyCode::Char('n') => open_new_task_modal(state),
@@ -1217,13 +1233,22 @@ fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyE
                 }
             }
         }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let half = state.panel_area.map(|r| r.height as usize / 2).unwrap_or(10);
+            state.task_cursor = state.task_cursor.saturating_sub(half);
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let half = state.panel_area.map(|r| r.height as usize / 2).unwrap_or(10);
+            state.task_cursor = (state.task_cursor + half).min(tasks.len().saturating_sub(1));
+        }
         KeyCode::Char('d') => {
             if let Some(t) = tasks.get(state.task_cursor) {
                 state.delete_confirm_name = t.title.clone();
                 state.app.modal = Some(Modal::DeleteTask { id: t.id });
             }
         }
-        KeyCode::Char('g') => open_new_group_modal(state),
+        KeyCode::Char('g') => { state.pending_g = true; }
+        KeyCode::Char('G') => { state.task_cursor = tasks.len().saturating_sub(1); }
         KeyCode::Char('f') => open_filter_modal(state),
         KeyCode::Char('/') => {
             state.tareas_search_active = true;
@@ -1280,14 +1305,23 @@ fn get_search_filtered_tasks(state: &RuntimeState) -> Vec<storage::Task> {
 
 fn handle_tareas_groups_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let groups = state.storage.list_groups().unwrap_or_default();
+    if state.pending_g {
+        state.pending_g = false;
+        if key.code == KeyCode::Char('g') {
+            state.group_cursor = 0;
+            return;
+        }
+    }
     match key.code {
-        KeyCode::Up if state.group_cursor > 0 => {
+        KeyCode::Up | KeyCode::Char('k') if state.group_cursor > 0 => {
             state.group_cursor -= 1;
         }
-        KeyCode::Down if state.group_cursor + 1 < groups.len() => {
+        KeyCode::Down | KeyCode::Char('j') if state.group_cursor + 1 < groups.len() => {
             state.group_cursor += 1;
         }
-        KeyCode::Char('g') => open_new_group_modal(state),
+        KeyCode::Char('n') => open_new_group_modal(state),
+        KeyCode::Char('g') => { state.pending_g = true; }
+        KeyCode::Char('G') => { state.group_cursor = groups.len().saturating_sub(1); }
         KeyCode::Char('e') => {
             if let Some(g) = groups.get(state.group_cursor) {
                 open_edit_group_modal(state, g.id);
@@ -1324,11 +1358,18 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
     let flat = flat_entries(&view);
     let count = entry_count(&flat);
 
+    if state.pending_g {
+        state.pending_g = false;
+        if key.code == KeyCode::Char('g') {
+            state.calendar_cursor = 0;
+            return;
+        }
+    }
     match key.code {
-        KeyCode::Up if state.calendar_cursor > 0 => {
+        KeyCode::Up | KeyCode::Char('k') if state.calendar_cursor > 0 => {
             state.calendar_cursor -= 1;
         }
-        KeyCode::Down if count > 0 && state.calendar_cursor + 1 < count => {
+        KeyCode::Down | KeyCode::Char('j') if count > 0 && state.calendar_cursor + 1 < count => {
             state.calendar_cursor += 1;
         }
         KeyCode::Char('n') => open_new_event_modal(state),
@@ -1368,6 +1409,14 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                 }
             }
         }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let half = state.panel_area.map(|r| r.height as usize / 2).unwrap_or(10);
+            state.calendar_cursor = state.calendar_cursor.saturating_sub(half);
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let half = state.panel_area.map(|r| r.height as usize / 2).unwrap_or(10);
+            state.calendar_cursor = (state.calendar_cursor + half).min(count.saturating_sub(1));
+        }
         KeyCode::Char('d') => {
             if let Some(entry) = nth_entry(&flat, state.calendar_cursor) {
                 state.delete_confirm_name = entry.text.clone();
@@ -1378,6 +1427,8 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                 }
             }
         }
+        KeyCode::Char('g') => { state.pending_g = true; }
+        KeyCode::Char('G') => { state.calendar_cursor = count.saturating_sub(1); }
         KeyCode::Char('f') => {
             state.calendar_filter_idx = (state.calendar_filter_idx + 1) % 4;
             state.calendar_cursor = 0;
@@ -1595,7 +1646,15 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
             let prev = if state.filter_form.field == 0 { n_fields - 1 } else { state.filter_form.field - 1 };
             state.filter_form.field = if !is_custom && prev > 3 { 3 } else { prev };
         }
-        KeyCode::Left => match state.filter_form.field {
+        KeyCode::Down | KeyCode::Char('j') => {
+            let next = (state.filter_form.field + 1) % n_fields;
+            state.filter_form.field = if !is_custom && next > 3 { 0 } else { next };
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            let prev = if state.filter_form.field == 0 { n_fields - 1 } else { state.filter_form.field - 1 };
+            state.filter_form.field = if !is_custom && prev > 3 { 3 } else { prev };
+        }
+        KeyCode::Left | KeyCode::Char('h') => match state.filter_form.field {
             0 => state.filter_form.status_idx = (state.filter_form.status_idx + 3) % 4,
             1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 3) % 4,
             2 => {
@@ -1605,7 +1664,7 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
             3 => state.filter_form.date_idx = (state.filter_form.date_idx + 6) % 7,
             _ => {}
         },
-        KeyCode::Right => match state.filter_form.field {
+        KeyCode::Right | KeyCode::Char('l') => match state.filter_form.field {
             0 => state.filter_form.status_idx = (state.filter_form.status_idx + 1) % 4,
             1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 1) % 4,
             2 => {
@@ -1784,21 +1843,33 @@ fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::Key
         KeyCode::BackTab => {
             state.settings_form.field = (state.settings_form.field + n_fields - 1) % n_fields;
         }
-        KeyCode::Left | KeyCode::Right if state.settings_form.field == 0 => {
+        KeyCode::Down if !settings_is_text_field(state.settings_form.field, is_local) => {
+            state.settings_form.field = (state.settings_form.field + 1) % n_fields;
+        }
+        KeyCode::Up if !settings_is_text_field(state.settings_form.field, is_local) => {
+            state.settings_form.field = (state.settings_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Char('j') if !settings_is_text_field(state.settings_form.field, is_local) => {
+            state.settings_form.field = (state.settings_form.field + 1) % n_fields;
+        }
+        KeyCode::Char('k') if !settings_is_text_field(state.settings_form.field, is_local) => {
+            state.settings_form.field = (state.settings_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if state.settings_form.field == 0 => {
             state.settings_form.language_idx = 1 - state.settings_form.language_idx;
         }
-        KeyCode::Left | KeyCode::Right if state.settings_form.field == 1 => {
+        KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if state.settings_form.field == 1 => {
             state.settings_form.provider_idx = 1 - state.settings_form.provider_idx;
         }
-        KeyCode::Left | KeyCode::Right if state.settings_form.field == 2 && !is_local => {
+        KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if state.settings_form.field == 2 && !is_local => {
             let idx = &mut state.settings_form.backend_idx;
-            if matches!(key.code, KeyCode::Right) {
+            if matches!(key.code, KeyCode::Right | KeyCode::Char('l')) {
                 *idx = (*idx + 1) % N_BACKENDS;
             } else {
                 *idx = (*idx + N_BACKENDS - 1) % N_BACKENDS;
             }
         }
-        KeyCode::Left | KeyCode::Right if state.settings_form.field == 4 => {
+        KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if state.settings_form.field == 4 => {
             state.settings_form.gcal_enabled = !state.settings_form.gcal_enabled;
         }
         KeyCode::Left if settings_is_text_field(state.settings_form.field, is_local) => {
@@ -1980,20 +2051,40 @@ fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEven
     match key.code {
         KeyCode::Tab => state.task_form.field = (state.task_form.field + 1) % n_fields,
         KeyCode::BackTab => state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields,
-        KeyCode::Left => match state.task_form.field {
-            0 => { state.task_form.title.move_left(); }
-            1 => state.task_form.priority_idx = (state.task_form.priority_idx + 2) % 3,
-            3 => { let n = state.groups_cache.len() + 1; state.task_form.group_idx = (state.task_form.group_idx + n - 1) % n; }
-            4 => state.task_form.status_idx = (state.task_form.status_idx + 2) % 3,
-            _ => {}
-        },
-        KeyCode::Right => match state.task_form.field {
-            0 => { state.task_form.title.move_right(); }
-            1 => state.task_form.priority_idx = (state.task_form.priority_idx + 1) % 3,
-            3 => { let n = state.groups_cache.len() + 1; state.task_form.group_idx = (state.task_form.group_idx + 1) % n; }
-            4 => state.task_form.status_idx = (state.task_form.status_idx + 1) % 3,
-            _ => {}
-        },
+        KeyCode::Down if state.task_form.field != 0 => {
+            state.task_form.field = (state.task_form.field + 1) % n_fields;
+        }
+        KeyCode::Up if state.task_form.field != 0 => {
+            state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Left | KeyCode::Char('h') if state.task_form.field == 1 => {
+            state.task_form.priority_idx = (state.task_form.priority_idx + 2) % 3;
+        }
+        KeyCode::Left | KeyCode::Char('h') if state.task_form.field == 3 => {
+            let n = state.groups_cache.len() + 1;
+            state.task_form.group_idx = (state.task_form.group_idx + n - 1) % n;
+        }
+        KeyCode::Left | KeyCode::Char('h') if state.task_form.field == 4 => {
+            state.task_form.status_idx = (state.task_form.status_idx + 2) % 3;
+        }
+        KeyCode::Right | KeyCode::Char('l') if state.task_form.field == 1 => {
+            state.task_form.priority_idx = (state.task_form.priority_idx + 1) % 3;
+        }
+        KeyCode::Right | KeyCode::Char('l') if state.task_form.field == 3 => {
+            let n = state.groups_cache.len() + 1;
+            state.task_form.group_idx = (state.task_form.group_idx + 1) % n;
+        }
+        KeyCode::Right | KeyCode::Char('l') if state.task_form.field == 4 => {
+            state.task_form.status_idx = (state.task_form.status_idx + 1) % 3;
+        }
+        KeyCode::Char('j') if state.task_form.field != 0 => {
+            state.task_form.field = (state.task_form.field + 1) % n_fields;
+        }
+        KeyCode::Char('k') if state.task_form.field != 0 => {
+            state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Left if state.task_form.field == 0 => { state.task_form.title.move_left(); }
+        KeyCode::Right if state.task_form.field == 0 => { state.task_form.title.move_right(); }
         KeyCode::Char(c) if state.task_form.field == 0 => { state.task_form.title.insert_char(c); }
         KeyCode::Backspace if state.task_form.field == 0 => { state.task_form.title.backspace(); }
         KeyCode::Delete if state.task_form.field == 0 => { state.task_form.title.delete(); }
@@ -2027,13 +2118,25 @@ fn handle_event_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
     match key.code {
         KeyCode::Tab => state.event_form.field = (state.event_form.field + 1) % n_fields,
         KeyCode::BackTab => state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields,
-        KeyCode::Left if state.event_form.field == 3 => {
+        KeyCode::Down if state.event_form.field != 0 && state.event_form.field != 2 => {
+            state.event_form.field = (state.event_form.field + 1) % n_fields;
+        }
+        KeyCode::Up if state.event_form.field != 0 && state.event_form.field != 2 => {
+            state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Left | KeyCode::Char('h') if state.event_form.field == 3 => {
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + n - 1) % n;
         }
-        KeyCode::Right if state.event_form.field == 3 => {
+        KeyCode::Right | KeyCode::Char('l') if state.event_form.field == 3 => {
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + 1) % n;
+        }
+        KeyCode::Char('j') if state.event_form.field == 3 => {
+            state.event_form.field = (state.event_form.field + 1) % n_fields;
+        }
+        KeyCode::Char('k') if state.event_form.field == 3 => {
+            state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields;
         }
         KeyCode::Left => match state.event_form.field {
             0 => { state.event_form.title.move_left(); }
@@ -2070,11 +2173,17 @@ fn handle_group_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
     match key.code {
         KeyCode::Tab => state.group_form.field = (state.group_form.field + 1) % 2,
         KeyCode::BackTab => state.group_form.field = (state.group_form.field + 1) % 2,
-        KeyCode::Left if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
+        KeyCode::Down | KeyCode::Up => {
+            state.group_form.field = (state.group_form.field + 1) % 2;
+        }
+        KeyCode::Left | KeyCode::Char('h') if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
             state.group_form.color_idx = (state.group_form.color_idx + COLOR_PRESETS.len() - 1) % COLOR_PRESETS.len();
         }
-        KeyCode::Right if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
+        KeyCode::Right | KeyCode::Char('l') if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
             state.group_form.color_idx = (state.group_form.color_idx + 1) % COLOR_PRESETS.len();
+        }
+        KeyCode::Char('j') | KeyCode::Char('k') if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
+            state.group_form.field = (state.group_form.field + 1) % 2;
         }
         KeyCode::Left if state.group_form.field == 0 => {
             state.group_form.name.move_left();
