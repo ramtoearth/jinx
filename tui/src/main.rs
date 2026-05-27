@@ -3004,8 +3004,8 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
 
             let response = jinx::ipc_handler::handle_storage_request(&env, &state.storage);
 
-            // Capture note results for the interactive picker
-            if matches!(mt, MessageType::StorageListNotes | MessageType::StorageSearchNotes) {
+            // Capture note results for the interactive picker (only search, not list)
+            if matches!(mt, MessageType::StorageSearchNotes) {
                 if let Some(payload) = response.payload.as_ref() {
                     if let Some(notes_arr) = payload.get("notes").and_then(|v| v.as_array()) {
                         let entries: Vec<NotePickerEntry> = notes_arr.iter().filter_map(|n| {
