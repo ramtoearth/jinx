@@ -473,6 +473,7 @@ dependencies = [
  "chrono",
  "crossterm",
  "directories",
+ "libc",
  "proptest",
  "pulldown-cmark",
  "ratatui",

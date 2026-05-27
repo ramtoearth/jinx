@@ -26,5 +26,8 @@ directories.workspace = true
 toml.workspace = true
 pulldown-cmark.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true

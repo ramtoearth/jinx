@@ -159,9 +159,17 @@ enum ChatRole {
 }
 
 #[derive(Debug, Clone)]
+struct NotePickerEntry {
+    id: i64,
+    title: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 struct ChatMsg {
     role: ChatRole,
     text: String,
+    note_results: Option<Vec<NotePickerEntry>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -803,6 +811,11 @@ struct RuntimeState {
     notes_current_id: Option<i64>,
     notes_preview_scroll: usize,
     notes_pending_g: bool,
+    // Note picker (interactive results in chat)
+    last_note_results: Option<Vec<NotePickerEntry>>,
+    note_picker_active: bool,
+    note_picker_cursor: usize,
+    note_picker_msg_idx: Option<usize>,
     // Layout rects for mouse hit-testing
     panel_area: Option<Rect>,
     input_area: Option<Rect>,
@@ -872,6 +885,10 @@ fn run_app(
         notes_current_id: None,
         notes_preview_scroll: 0,
         notes_pending_g: false,
+        last_note_results: None,
+        note_picker_active: false,
+        note_picker_cursor: 0,
+        note_picker_msg_idx: None,
         panel_area: None,
         input_area: None,
         history_area: None,
@@ -989,6 +1006,53 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
 }
 
 fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    // Note picker intercepts keys when active
+    if state.note_picker_active {
+        if let Some(msg_idx) = state.note_picker_msg_idx {
+            let count = state.chat_history.get(msg_idx)
+                .and_then(|m| m.note_results.as_ref())
+                .map(|v| v.len())
+                .unwrap_or(0);
+            if count > 0 {
+                match key.code {
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if state.note_picker_cursor + 1 < count {
+                            state.note_picker_cursor += 1;
+                        }
+                        return;
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if state.note_picker_cursor > 0 {
+                            state.note_picker_cursor -= 1;
+                        }
+                        return;
+                    }
+                    KeyCode::Enter => {
+                        if let Some(entry) = state.chat_history.get(msg_idx)
+                            .and_then(|m| m.note_results.as_ref())
+                            .and_then(|v| v.get(state.note_picker_cursor))
+                        {
+                            let note_id = entry.id;
+                            state.notes_current_id = Some(note_id);
+                            state.notes_view = NotesView::Preview;
+                            state.notes_preview_scroll = 0;
+                            state.app.focused_panel = Panel::Notas;
+                            refresh_notes_cache(state);
+                        }
+                        state.note_picker_active = false;
+                        return;
+                    }
+                    KeyCode::Esc => {
+                        state.note_picker_active = false;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        state.note_picker_active = false;
+    }
+
     match key.code {
         KeyCode::Enter => {
             let text = state.chat_editor.to_string();
@@ -1000,7 +1064,8 @@ fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
             state.prompt_history.push(trimmed.clone());
             state.prompt_history_idx = None;
             state.prompt_stash.clear();
-            state.chat_history.push(ChatMsg { role: ChatRole::User, text: trimmed.clone() });
+            state.note_picker_active = false;
+            state.chat_history.push(ChatMsg { role: ChatRole::User, text: trimmed.clone(), note_results: None });
             state.chat_editor.clear();
             state.chat_scroll = 0;
             send_user_message(state, trimmed);
@@ -2405,16 +2470,21 @@ fn spawn_agent(state: &mut RuntimeState) {
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
 
-    let mut child = Command::new("uv")
-        .args([
+    let mut cmd = Command::new("uv");
+    cmd.args([
             "run",
             "--project", agent_project.to_str().unwrap_or("."),
             "python", "-m", "agent.main",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(agent_stderr)
-        .spawn()
+        .stderr(agent_stderr);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn()
         .unwrap_or_else(|e| {
             eprintln!("{}", state.locale.errors.agent_start.replace("{error}", &e.to_string()));
             eprintln!("Install uv: brew install uv  (or https://astral.sh/uv)");
@@ -2547,8 +2617,8 @@ fn spawn_sync_daemon(state: &mut RuntimeState) {
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
 
-    let child_result = Command::new("uv")
-        .args([
+    let mut sync_cmd = Command::new("uv");
+    sync_cmd.args([
             "run",
             "--project", agent_project.to_str().unwrap_or("."),
             "--extra", "gcal",
@@ -2560,8 +2630,13 @@ fn spawn_sync_daemon(state: &mut RuntimeState) {
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(sync_stderr)
-        .spawn();
+        .stderr(sync_stderr);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        sync_cmd.process_group(0);
+    }
+    let child_result = sync_cmd.spawn();
 
     let mut child = match child_result {
         Ok(c) => c,
@@ -2683,6 +2758,29 @@ fn run_gcal_oauth(state: &mut RuntimeState) {
     });
 }
 
+/// Kill a child process and its entire process group.
+/// On Unix, sends SIGTERM to the process group, then SIGKILL if it doesn't exit.
+/// On non-Unix, falls back to `child.kill()`.
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        // Send SIGTERM to the process group (negative pid = group)
+        unsafe { libc::kill(-pid, libc::SIGTERM); }
+        // Give it a moment to exit gracefully
+        std::thread::sleep(Duration::from_millis(100));
+        if let Ok(Some(_)) = child.try_wait() { return; }
+        // Force kill the group
+        unsafe { libc::kill(-pid, libc::SIGKILL); }
+        let _ = child.wait();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 fn shutdown_sync_daemon(state: &mut RuntimeState) {
     if let Some(ref mut stdin) = state.sync_stdin {
         let cmd = "{\"command\":\"stop\"}\n";
@@ -2697,8 +2795,7 @@ fn shutdown_sync_daemon(state: &mut RuntimeState) {
             match child.try_wait() {
                 Ok(Some(_)) => break,
                 Ok(None) if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_process_tree(child);
                     break;
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(50)),
@@ -2821,8 +2918,7 @@ fn send_shutdown(state: &mut RuntimeState) {
             match child.try_wait() {
                 Ok(Some(_)) => break,
                 Ok(None) if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_process_tree(child);
                     break;
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(50)),
@@ -2830,6 +2926,7 @@ fn send_shutdown(state: &mut RuntimeState) {
             }
         }
     }
+    state.agent_child = None;
 }
 
 fn read_agent_output(state: &mut RuntimeState) {
@@ -2843,14 +2940,26 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
         MessageType::AgentInitAck => {
             if let Ok(Some(p)) = env.payload_as::<AgentInitAckPayload>() {
                 if let Some(notice) = p.provider_notice {
-                    state.chat_history.push(ChatMsg { role: ChatRole::System, text: notice });
+                    state.chat_history.push(ChatMsg { role: ChatRole::System, text: notice, note_results: None });
                 }
             }
         }
         MessageType::AgentReply => {
             if let Ok(Some(p)) = env.payload_as::<AgentReplyPayload>() {
-                state.chat_history.push(ChatMsg { role: ChatRole::Agent, text: p.text });
-                state.chat_scroll = 0; // auto-scroll to bottom on new message
+                let note_results = state.last_note_results.take()
+                    .filter(|v| !v.is_empty());
+                let msg_idx = state.chat_history.len();
+                state.chat_history.push(ChatMsg {
+                    role: ChatRole::Agent,
+                    text: p.text,
+                    note_results: note_results.clone(),
+                });
+                if note_results.is_some() {
+                    state.note_picker_active = true;
+                    state.note_picker_cursor = 0;
+                    state.note_picker_msg_idx = Some(msg_idx);
+                }
+                state.chat_scroll = 0;
             }
             state.pending_request = None;
             state.app.status_bar = state.locale.status.ready.clone();
@@ -2894,6 +3003,22 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
             };
 
             let response = jinx::ipc_handler::handle_storage_request(&env, &state.storage);
+
+            // Capture note results for the interactive picker
+            if matches!(mt, MessageType::StorageListNotes | MessageType::StorageSearchNotes) {
+                if let Some(payload) = response.payload.as_ref() {
+                    if let Some(notes_arr) = payload.get("notes").and_then(|v| v.as_array()) {
+                        let entries: Vec<NotePickerEntry> = notes_arr.iter().filter_map(|n| {
+                            Some(NotePickerEntry {
+                                id: n.get("id")?.as_i64()?,
+                                title: n.get("title")?.as_str()?.to_string(),
+                                updated_at: n.get("updated_at")?.as_str()?.to_string(),
+                            })
+                        }).collect();
+                        state.last_note_results = Some(entries);
+                    }
+                }
+            }
 
             // Trigger Google Calendar push for event and task mutations
             if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
@@ -3510,7 +3635,7 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
 
     // Build display lines for all messages
     let mut all_lines: Vec<Line<'static>> = Vec::new();
-    for msg in &state.chat_history {
+    for (msg_idx, msg) in state.chat_history.iter().enumerate() {
         let (label, color): (&str, Color) = match msg.role {
             ChatRole::Agent => (state.locale.chat.agent.as_str(), Color::Green),
             ChatRole::System => (state.locale.chat.system.as_str(), Color::Yellow),
@@ -3538,6 +3663,43 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
                 )));
             }
         }
+
+        // Render note picker entries if present
+        if let Some(entries) = &msg.note_results {
+            let is_active = state.note_picker_active
+                && state.note_picker_msg_idx == Some(msg_idx);
+            all_lines.push(Line::from(Span::styled(
+                "  ┌─────────────────────────────────────┐".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )));
+            for (i, entry) in entries.iter().enumerate() {
+                let cursor = if is_active && i == state.note_picker_cursor { "▶" } else { " " };
+                let title = if entry.title.is_empty() {
+                    &state.locale.misc.untitled_note
+                } else {
+                    &entry.title
+                };
+                let date = &entry.updated_at[..10.min(entry.updated_at.len())];
+                let label_text = format!("  │ {cursor} {title}  {date}");
+                let entry_style = if is_active && i == state.note_picker_cursor {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                all_lines.push(Line::from(Span::styled(label_text, entry_style)));
+            }
+            all_lines.push(Line::from(Span::styled(
+                "  └─────────────────────────────────────┘".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )));
+            if is_active {
+                all_lines.push(Line::from(Span::styled(
+                    "  ↑↓:select  Enter:open  Esc:close".to_string(),
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                )));
+            }
+        }
+
         all_lines.push(Line::from(""));
     }
 
