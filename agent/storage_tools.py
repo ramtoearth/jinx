@@ -414,14 +414,41 @@ def sync_google() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _snippet(body: str, term: str, context_lines: int = 5) -> str:
+    """Extract a window of lines around the first match of term in body."""
+    lines = body.split("\n")
+    term_lower = term.lower()
+    match_idx = None
+    for i, line in enumerate(lines):
+        if term_lower in line.lower():
+            match_idx = i
+            break
+    if match_idx is None:
+        return "\n".join(lines[:context_lines * 2])
+    start = max(0, match_idx - context_lines)
+    end = min(len(lines), match_idx + context_lines + 1)
+    snippet = "\n".join(lines[start:end])
+    if start > 0:
+        snippet = "...\n" + snippet
+    if end < len(lines):
+        snippet = snippet + "\n..."
+    return snippet
+
+
 @tool
 def list_notes() -> List[Dict[str, Any]]:
     """List all notes, ordered by most recently updated first.
 
-    Returns a list of note dicts with id, title, body, created_at, updated_at.
+    Returns a list of note dicts with id, title, body (first 10 lines), created_at, updated_at.
     """
     result = _send("storage.list_notes")
-    return result.get("notes", [])
+    notes = result.get("notes", [])
+    for note in notes:
+        if note.get("body"):
+            lines = note["body"].split("\n")
+            if len(lines) > 10:
+                note["body"] = "\n".join(lines[:10]) + "\n..."
+    return notes
 
 
 
@@ -431,7 +458,7 @@ def search_notes(search_term: str) -> List[Dict[str, Any]]:
 
     search_term: plain text to search for, e.g. "David" or "despensa".
                  Pass a simple string, not JSON.
-    Returns notes where title or body contains the search_term.
+    Returns notes where title or body contains the search_term (body is a snippet around the match).
     """
     import json as _j
     import re as _re
@@ -445,7 +472,11 @@ def search_notes(search_term: str) -> List[Dict[str, Any]]:
     if m and ('"' in search_term or "query" in search_term or "search_term" in search_term):
         search_term = m.group(1)
     result = _send("storage.search_notes", {"query": search_term})
-    return result.get("notes", [])
+    notes = result.get("notes", [])
+    for note in notes:
+        if note.get("body"):
+            note["body"] = _snippet(note["body"], search_term)
+    return notes
 
 
 
