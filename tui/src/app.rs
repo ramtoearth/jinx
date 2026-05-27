@@ -11,16 +11,17 @@ use storage::StorageError;
 // Panel identity
 // ---------------------------------------------------------------------------
 
-/// The three panels of the TUI layout.
+/// The four panels of the TUI layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Chat,
     Tareas,
     Calendario,
+    Notas,
 }
 
-/// Fixed focus cycle: Chat → Tareas → Calendario → Chat
-static CYCLE: [Panel; 3] = [Panel::Chat, Panel::Tareas, Panel::Calendario];
+/// Fixed focus cycle: Chat → Tareas → Calendario → Notas → Chat
+static CYCLE: [Panel; 4] = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas];
 
 impl Panel {
     fn index(self) -> usize {
@@ -28,11 +29,12 @@ impl Panel {
             Self::Chat => 0,
             Self::Tareas => 1,
             Self::Calendario => 2,
+            Self::Notas => 3,
         }
     }
 
     fn from_index(i: usize) -> Self {
-        CYCLE[i % 3]
+        CYCLE[i % 4]
     }
 
     /// Advance focus forward (Tab).
@@ -42,7 +44,7 @@ impl Panel {
 
     /// Advance focus backward (Shift+Tab).
     pub fn prev(self) -> Self {
-        Self::from_index(self.index() + 2) // +2 mod 3 = -1 mod 3
+        Self::from_index(self.index() + 3) // +3 mod 4 = -1 mod 4
     }
 }
 
@@ -66,6 +68,7 @@ pub enum Modal {
     Export,
     Error { message: String },
     Settings,
+    DeleteNote { id: i64 },
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +257,7 @@ fn dispatch_panel_key(state: &mut AppState, key: KeyEvent) {
         Panel::Chat => dispatch_chat_key(state, key),
         Panel::Tareas => dispatch_tareas_key(state, key),
         Panel::Calendario => dispatch_calendario_key(state, key),
+        Panel::Notas => dispatch_notas_key(state, key),
     }
 }
 
@@ -272,4 +276,8 @@ fn dispatch_tareas_key(state: &mut AppState, key: KeyEvent) {
 
 fn dispatch_calendario_key(_state: &mut AppState, _key: KeyEvent) {
     // Handled directly in main.rs handle_calendario_key
+}
+
+fn dispatch_notas_key(_state: &mut AppState, _key: KeyEvent) {
+    // Handled directly in main.rs / notas.rs
 }

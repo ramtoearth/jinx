@@ -234,6 +234,18 @@ pub enum MessageType {
     // --- Storage: sync ----------------------------------------------------
     #[serde(rename = "storage.sync_google")]
     StorageSyncGoogle,
+
+    // --- Storage: notes ---------------------------------------------------
+    #[serde(rename = "storage.list_notes")]
+    StorageListNotes,
+    #[serde(rename = "storage.search_notes")]
+    StorageSearchNotes,
+    #[serde(rename = "storage.create_note")]
+    StorageCreateNote,
+    #[serde(rename = "storage.update_note")]
+    StorageUpdateNote,
+    #[serde(rename = "storage.delete_note")]
+    StorageDeleteNote,
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +636,76 @@ pub struct StorageExportSqliteRequest {
 pub struct StorageExportSqliteResponse {
     pub written_path: String,
 }
+
+// ---------------------------------------------------------------------------
+// Storage.Notes request/response payloads
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageNoteDto {
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StorageNotePatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StorageListNotesRequest {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageListNotesResponse {
+    pub notes: Vec<StorageNoteDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageSearchNotesRequest {
+    pub query: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageSearchNotesResponse {
+    pub notes: Vec<StorageNoteDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageCreateNoteRequest {
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageCreateNoteResponse {
+    pub note: StorageNoteDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageUpdateNoteRequest {
+    pub id: i64,
+    pub patch: StorageNotePatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageUpdateNoteResponse {
+    pub note: StorageNoteDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageDeleteNoteRequest {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StorageDeleteNoteResponse {}
 
 // ---------------------------------------------------------------------------
 // Tests — minimal smoke checks wiring the types together. The full

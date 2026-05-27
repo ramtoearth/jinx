@@ -53,7 +53,7 @@ proptest! {
         // guaranteed by the Panel enum (single value), but we verify the
         // invariant holds after mutations.
         let panel = state.focused_panel;
-        let valid = matches!(panel, Panel::Chat | Panel::Tareas | Panel::Calendario);
+        let valid = matches!(panel, Panel::Chat | Panel::Tareas | Panel::Calendario | Panel::Notas);
         prop_assert!(valid, "focused_panel is not a valid Panel variant");
     }
 }
@@ -69,7 +69,7 @@ proptest! {
         k in arb_tab_count(),
         (cols, rows) in arb_viewport_ok(),
     ) {
-        let order = [Panel::Chat, Panel::Tareas, Panel::Calendario];
+        let order = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas];
         let mut state = AppState::new(cols, rows);
         // Always start from Chat (default)
         prop_assert_eq!(state.focused_panel, Panel::Chat);
@@ -77,7 +77,7 @@ proptest! {
         for _ in 0..k {
             state = reduce(state, key_tab());
         }
-        let expected = order[k % 3];
+        let expected = order[k % 4];
         prop_assert_eq!(
             state.focused_panel, expected,
             "after {} Tab presses, expected {:?}", k, expected
@@ -106,8 +106,8 @@ proptest! {
 
         // Reverse one step
         state = reduce(state, key_shift_tab());
-        let order = [Panel::Chat, Panel::Tareas, Panel::Calendario];
-        let expected = order[(k + 2) % 3]; // k-1 mod 3
+        let order = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas];
+        let expected = order[(k + 3) % 4]; // k-1 mod 4
         prop_assert_eq!(
             state.focused_panel, expected,
             "shift-tab from {:?} should reach {:?}", after_forward, expected
@@ -181,8 +181,8 @@ proptest! {
         for _ in 0..k {
             state = reduce(state, key_tab());
         }
-        let order = [Panel::Chat, Panel::Tareas, Panel::Calendario];
-        let expected = order[k % 3];
+        let order = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas];
+        let expected = order[k % 4];
         prop_assert_eq!(state.focused_panel, expected);
     }
 }

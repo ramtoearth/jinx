@@ -159,9 +159,17 @@ enum ChatRole {
 }
 
 #[derive(Debug, Clone)]
+struct NotePickerEntry {
+    id: i64,
+    title: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 struct ChatMsg {
     role: ChatRole,
     text: String,
+    note_results: Option<Vec<NotePickerEntry>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -491,15 +499,19 @@ impl DateTimeInput {
                 self.commit_typing_buf();
                 if self.segment > 0 {
                     self.segment -= 1;
+                    DateInputResult::Consumed
+                } else {
+                    DateInputResult::PrevField
                 }
-                DateInputResult::Consumed
             }
             KeyCode::Right => {
                 self.commit_typing_buf();
                 if self.segment + 1 < self.n_segments() {
                     self.segment += 1;
+                    DateInputResult::Consumed
+                } else {
+                    DateInputResult::NextField
                 }
-                DateInputResult::Consumed
             }
             KeyCode::Up => {
                 self.commit_typing_buf();
@@ -693,6 +705,14 @@ enum TareasSection {
     Groups,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum NotesView {
+    #[default]
+    List,
+    Preview,
+    Edit,
+}
+
 #[derive(Clone)]
 struct ActiveTaskFilter {
     status: Option<TaskStatus>,
@@ -777,6 +797,25 @@ struct RuntimeState {
     filter_form: FilterFormState,
     groups_cache: Vec<Group>,
     delete_confirm_name: String,
+    pending_g: bool,
+    // Notes panel state
+    notes_cache: Vec<storage::Note>,
+    notes_cursor: usize,
+    notes_scroll: usize,
+    notes_view: NotesView,
+    notes_editor: TextEditor,
+    notes_title_editor: TextEditor,
+    notes_title_focused: bool,
+    notes_search_active: bool,
+    notes_search_query: String,
+    notes_current_id: Option<i64>,
+    notes_preview_scroll: usize,
+    notes_pending_g: bool,
+    // Note picker (interactive results in chat)
+    last_note_results: Option<Vec<NotePickerEntry>>,
+    note_picker_active: bool,
+    note_picker_cursor: usize,
+    note_picker_msg_idx: Option<usize>,
     // Layout rects for mouse hit-testing
     panel_area: Option<Rect>,
     input_area: Option<Rect>,
@@ -833,6 +872,23 @@ fn run_app(
         filter_form: FilterFormState::default(),
         groups_cache: Vec::new(),
         delete_confirm_name: String::new(),
+        pending_g: false,
+        notes_cache: Vec::new(),
+        notes_cursor: 0,
+        notes_scroll: 0,
+        notes_view: NotesView::default(),
+        notes_editor: TextEditor::new(),
+        notes_title_editor: TextEditor::new(),
+        notes_title_focused: true,
+        notes_search_active: false,
+        notes_search_query: String::new(),
+        notes_current_id: None,
+        notes_preview_scroll: 0,
+        notes_pending_g: false,
+        last_note_results: None,
+        note_picker_active: false,
+        note_picker_cursor: 0,
+        note_picker_msg_idx: None,
         panel_area: None,
         input_area: None,
         history_area: None,
@@ -917,10 +973,14 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     // Tab / Shift-Tab cycle panels
     match key.code {
         KeyCode::Tab if key.modifiers == KeyModifiers::NONE => {
+            state.pending_g = false;
+            state.notes_pending_g = false;
             state.app = jinx::app::reduce(state.app.clone(), AppEvent::Key(key));
             return;
         }
         KeyCode::BackTab => {
+            state.pending_g = false;
+            state.notes_pending_g = false;
             state.app = jinx::app::reduce(state.app.clone(), AppEvent::Key(key));
             return;
         }
@@ -941,10 +1001,58 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         Panel::Chat => handle_chat_key(state, key),
         Panel::Tareas => handle_tareas_key(state, key),
         Panel::Calendario => handle_calendario_key(state, key),
+        Panel::Notas => handle_notas_key(state, key),
     }
 }
 
 fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    // Note picker intercepts keys when active
+    if state.note_picker_active {
+        if let Some(msg_idx) = state.note_picker_msg_idx {
+            let count = state.chat_history.get(msg_idx)
+                .and_then(|m| m.note_results.as_ref())
+                .map(|v| v.len())
+                .unwrap_or(0);
+            if count > 0 {
+                match key.code {
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if state.note_picker_cursor + 1 < count {
+                            state.note_picker_cursor += 1;
+                        }
+                        return;
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if state.note_picker_cursor > 0 {
+                            state.note_picker_cursor -= 1;
+                        }
+                        return;
+                    }
+                    KeyCode::Enter => {
+                        if let Some(entry) = state.chat_history.get(msg_idx)
+                            .and_then(|m| m.note_results.as_ref())
+                            .and_then(|v| v.get(state.note_picker_cursor))
+                        {
+                            let note_id = entry.id;
+                            state.notes_current_id = Some(note_id);
+                            state.notes_view = NotesView::Preview;
+                            state.notes_preview_scroll = 0;
+                            state.app.focused_panel = Panel::Notas;
+                            refresh_notes_cache(state);
+                        }
+                        state.note_picker_active = false;
+                        return;
+                    }
+                    KeyCode::Esc => {
+                        state.note_picker_active = false;
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        state.note_picker_active = false;
+    }
+
     match key.code {
         KeyCode::Enter => {
             let text = state.chat_editor.to_string();
@@ -956,7 +1064,8 @@ fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
             state.prompt_history.push(trimmed.clone());
             state.prompt_history_idx = None;
             state.prompt_stash.clear();
-            state.chat_history.push(ChatMsg { role: ChatRole::User, text: trimmed.clone() });
+            state.note_picker_active = false;
+            state.chat_history.push(ChatMsg { role: ChatRole::User, text: trimmed.clone(), note_results: None });
             state.chat_editor.clear();
             state.chat_scroll = 0;
             send_user_message(state, trimmed);
@@ -1161,6 +1270,7 @@ fn handle_tareas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) 
     }
 
     if key.code == KeyCode::Char('s') {
+        state.pending_g = false;
         state.tareas_section = match state.tareas_section {
             TareasSection::Tasks => TareasSection::Groups,
             TareasSection::Groups => TareasSection::Tasks,
@@ -1180,11 +1290,18 @@ fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyE
     } else {
         get_filtered_tasks(state)
     };
+    if state.pending_g {
+        state.pending_g = false;
+        if key.code == KeyCode::Char('g') {
+            state.task_cursor = 0;
+            return;
+        }
+    }
     match key.code {
-        KeyCode::Up if state.task_cursor > 0 => {
+        KeyCode::Up | KeyCode::Char('k') if state.task_cursor > 0 => {
             state.task_cursor -= 1;
         }
-        KeyCode::Down if state.task_cursor + 1 < tasks.len() => {
+        KeyCode::Down | KeyCode::Char('j') if state.task_cursor + 1 < tasks.len() => {
             state.task_cursor += 1;
         }
         KeyCode::Char('n') => open_new_task_modal(state),
@@ -1217,13 +1334,22 @@ fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyE
                 }
             }
         }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let half = state.panel_area.map(|r| r.height as usize / 2).unwrap_or(10);
+            state.task_cursor = state.task_cursor.saturating_sub(half);
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let half = state.panel_area.map(|r| r.height as usize / 2).unwrap_or(10);
+            state.task_cursor = (state.task_cursor + half).min(tasks.len().saturating_sub(1));
+        }
         KeyCode::Char('d') => {
             if let Some(t) = tasks.get(state.task_cursor) {
                 state.delete_confirm_name = t.title.clone();
                 state.app.modal = Some(Modal::DeleteTask { id: t.id });
             }
         }
-        KeyCode::Char('g') => open_new_group_modal(state),
+        KeyCode::Char('g') => { state.pending_g = true; }
+        KeyCode::Char('G') => { state.task_cursor = tasks.len().saturating_sub(1); }
         KeyCode::Char('f') => open_filter_modal(state),
         KeyCode::Char('/') => {
             state.tareas_search_active = true;
@@ -1280,14 +1406,23 @@ fn get_search_filtered_tasks(state: &RuntimeState) -> Vec<storage::Task> {
 
 fn handle_tareas_groups_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     let groups = state.storage.list_groups().unwrap_or_default();
+    if state.pending_g {
+        state.pending_g = false;
+        if key.code == KeyCode::Char('g') {
+            state.group_cursor = 0;
+            return;
+        }
+    }
     match key.code {
-        KeyCode::Up if state.group_cursor > 0 => {
+        KeyCode::Up | KeyCode::Char('k') if state.group_cursor > 0 => {
             state.group_cursor -= 1;
         }
-        KeyCode::Down if state.group_cursor + 1 < groups.len() => {
+        KeyCode::Down | KeyCode::Char('j') if state.group_cursor + 1 < groups.len() => {
             state.group_cursor += 1;
         }
-        KeyCode::Char('g') => open_new_group_modal(state),
+        KeyCode::Char('n') => open_new_group_modal(state),
+        KeyCode::Char('g') => { state.pending_g = true; }
+        KeyCode::Char('G') => { state.group_cursor = groups.len().saturating_sub(1); }
         KeyCode::Char('e') => {
             if let Some(g) = groups.get(state.group_cursor) {
                 open_edit_group_modal(state, g.id);
@@ -1324,11 +1459,18 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
     let flat = flat_entries(&view);
     let count = entry_count(&flat);
 
+    if state.pending_g {
+        state.pending_g = false;
+        if key.code == KeyCode::Char('g') {
+            state.calendar_cursor = 0;
+            return;
+        }
+    }
     match key.code {
-        KeyCode::Up if state.calendar_cursor > 0 => {
+        KeyCode::Up | KeyCode::Char('k') if state.calendar_cursor > 0 => {
             state.calendar_cursor -= 1;
         }
-        KeyCode::Down if count > 0 && state.calendar_cursor + 1 < count => {
+        KeyCode::Down | KeyCode::Char('j') if count > 0 && state.calendar_cursor + 1 < count => {
             state.calendar_cursor += 1;
         }
         KeyCode::Char('n') => open_new_event_modal(state),
@@ -1368,6 +1510,14 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                 }
             }
         }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let half = state.panel_area.map(|r| r.height as usize / 2).unwrap_or(10);
+            state.calendar_cursor = state.calendar_cursor.saturating_sub(half);
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let half = state.panel_area.map(|r| r.height as usize / 2).unwrap_or(10);
+            state.calendar_cursor = (state.calendar_cursor + half).min(count.saturating_sub(1));
+        }
         KeyCode::Char('d') => {
             if let Some(entry) = nth_entry(&flat, state.calendar_cursor) {
                 state.delete_confirm_name = entry.text.clone();
@@ -1378,6 +1528,8 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                 }
             }
         }
+        KeyCode::Char('g') => { state.pending_g = true; }
+        KeyCode::Char('G') => { state.calendar_cursor = count.saturating_sub(1); }
         KeyCode::Char('f') => {
             state.calendar_filter_idx = (state.calendar_filter_idx + 1) % 4;
             state.calendar_cursor = 0;
@@ -1595,7 +1747,15 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
             let prev = if state.filter_form.field == 0 { n_fields - 1 } else { state.filter_form.field - 1 };
             state.filter_form.field = if !is_custom && prev > 3 { 3 } else { prev };
         }
-        KeyCode::Left => match state.filter_form.field {
+        KeyCode::Down | KeyCode::Char('j') => {
+            let next = (state.filter_form.field + 1) % n_fields;
+            state.filter_form.field = if !is_custom && next > 3 { 0 } else { next };
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            let prev = if state.filter_form.field == 0 { n_fields - 1 } else { state.filter_form.field - 1 };
+            state.filter_form.field = if !is_custom && prev > 3 { 3 } else { prev };
+        }
+        KeyCode::Left | KeyCode::Char('h') => match state.filter_form.field {
             0 => state.filter_form.status_idx = (state.filter_form.status_idx + 3) % 4,
             1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 3) % 4,
             2 => {
@@ -1605,7 +1765,7 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
             3 => state.filter_form.date_idx = (state.filter_form.date_idx + 6) % 7,
             _ => {}
         },
-        KeyCode::Right => match state.filter_form.field {
+        KeyCode::Right | KeyCode::Char('l') => match state.filter_form.field {
             0 => state.filter_form.status_idx = (state.filter_form.status_idx + 1) % 4,
             1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 1) % 4,
             2 => {
@@ -1784,21 +1944,33 @@ fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::Key
         KeyCode::BackTab => {
             state.settings_form.field = (state.settings_form.field + n_fields - 1) % n_fields;
         }
-        KeyCode::Left | KeyCode::Right if state.settings_form.field == 0 => {
+        KeyCode::Down if !settings_is_text_field(state.settings_form.field, is_local) => {
+            state.settings_form.field = (state.settings_form.field + 1) % n_fields;
+        }
+        KeyCode::Up if !settings_is_text_field(state.settings_form.field, is_local) => {
+            state.settings_form.field = (state.settings_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Char('j') if !settings_is_text_field(state.settings_form.field, is_local) => {
+            state.settings_form.field = (state.settings_form.field + 1) % n_fields;
+        }
+        KeyCode::Char('k') if !settings_is_text_field(state.settings_form.field, is_local) => {
+            state.settings_form.field = (state.settings_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if state.settings_form.field == 0 => {
             state.settings_form.language_idx = 1 - state.settings_form.language_idx;
         }
-        KeyCode::Left | KeyCode::Right if state.settings_form.field == 1 => {
+        KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if state.settings_form.field == 1 => {
             state.settings_form.provider_idx = 1 - state.settings_form.provider_idx;
         }
-        KeyCode::Left | KeyCode::Right if state.settings_form.field == 2 && !is_local => {
+        KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if state.settings_form.field == 2 && !is_local => {
             let idx = &mut state.settings_form.backend_idx;
-            if matches!(key.code, KeyCode::Right) {
+            if matches!(key.code, KeyCode::Right | KeyCode::Char('l')) {
                 *idx = (*idx + 1) % N_BACKENDS;
             } else {
                 *idx = (*idx + N_BACKENDS - 1) % N_BACKENDS;
             }
         }
-        KeyCode::Left | KeyCode::Right if state.settings_form.field == 4 => {
+        KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if state.settings_form.field == 4 => {
             state.settings_form.gcal_enabled = !state.settings_form.gcal_enabled;
         }
         KeyCode::Left if settings_is_text_field(state.settings_form.field, is_local) => {
@@ -1935,6 +2107,19 @@ fn handle_modal_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
+        Some(Modal::DeleteNote { id }) => handle_delete_key(state, key, |s| {
+            match s.storage.delete_note(id) {
+                Ok(_) => {
+                    s.app.modal = None;
+                    s.app.status_bar = s.locale.status.note_deleted.clone();
+                    s.notes_view = NotesView::List;
+                    s.notes_current_id = None;
+                    refresh_notes_cache(s);
+                    if s.notes_cursor > 0 { s.notes_cursor -= 1; }
+                }
+                Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
+            }
+        }),
         Some(Modal::Settings) => handle_settings_form_key(state, key),
         Some(Modal::FilterTasks) => handle_filter_form_key(state, key),
         _ => { if key.code == KeyCode::Esc { state.app.modal = None; } }
@@ -1980,20 +2165,40 @@ fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEven
     match key.code {
         KeyCode::Tab => state.task_form.field = (state.task_form.field + 1) % n_fields,
         KeyCode::BackTab => state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields,
-        KeyCode::Left => match state.task_form.field {
-            0 => { state.task_form.title.move_left(); }
-            1 => state.task_form.priority_idx = (state.task_form.priority_idx + 2) % 3,
-            3 => { let n = state.groups_cache.len() + 1; state.task_form.group_idx = (state.task_form.group_idx + n - 1) % n; }
-            4 => state.task_form.status_idx = (state.task_form.status_idx + 2) % 3,
-            _ => {}
-        },
-        KeyCode::Right => match state.task_form.field {
-            0 => { state.task_form.title.move_right(); }
-            1 => state.task_form.priority_idx = (state.task_form.priority_idx + 1) % 3,
-            3 => { let n = state.groups_cache.len() + 1; state.task_form.group_idx = (state.task_form.group_idx + 1) % n; }
-            4 => state.task_form.status_idx = (state.task_form.status_idx + 1) % 3,
-            _ => {}
-        },
+        KeyCode::Down if state.task_form.field != 0 => {
+            state.task_form.field = (state.task_form.field + 1) % n_fields;
+        }
+        KeyCode::Up if state.task_form.field != 0 => {
+            state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Left | KeyCode::Char('h') if state.task_form.field == 1 => {
+            state.task_form.priority_idx = (state.task_form.priority_idx + 2) % 3;
+        }
+        KeyCode::Left | KeyCode::Char('h') if state.task_form.field == 3 => {
+            let n = state.groups_cache.len() + 1;
+            state.task_form.group_idx = (state.task_form.group_idx + n - 1) % n;
+        }
+        KeyCode::Left | KeyCode::Char('h') if state.task_form.field == 4 => {
+            state.task_form.status_idx = (state.task_form.status_idx + 2) % 3;
+        }
+        KeyCode::Right | KeyCode::Char('l') if state.task_form.field == 1 => {
+            state.task_form.priority_idx = (state.task_form.priority_idx + 1) % 3;
+        }
+        KeyCode::Right | KeyCode::Char('l') if state.task_form.field == 3 => {
+            let n = state.groups_cache.len() + 1;
+            state.task_form.group_idx = (state.task_form.group_idx + 1) % n;
+        }
+        KeyCode::Right | KeyCode::Char('l') if state.task_form.field == 4 => {
+            state.task_form.status_idx = (state.task_form.status_idx + 1) % 3;
+        }
+        KeyCode::Char('j') if state.task_form.field != 0 => {
+            state.task_form.field = (state.task_form.field + 1) % n_fields;
+        }
+        KeyCode::Char('k') if state.task_form.field != 0 => {
+            state.task_form.field = (state.task_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Left if state.task_form.field == 0 => { state.task_form.title.move_left(); }
+        KeyCode::Right if state.task_form.field == 0 => { state.task_form.title.move_right(); }
         KeyCode::Char(c) if state.task_form.field == 0 => { state.task_form.title.insert_char(c); }
         KeyCode::Backspace if state.task_form.field == 0 => { state.task_form.title.backspace(); }
         KeyCode::Delete if state.task_form.field == 0 => { state.task_form.title.delete(); }
@@ -2027,13 +2232,25 @@ fn handle_event_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
     match key.code {
         KeyCode::Tab => state.event_form.field = (state.event_form.field + 1) % n_fields,
         KeyCode::BackTab => state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields,
-        KeyCode::Left if state.event_form.field == 3 => {
+        KeyCode::Down if state.event_form.field != 0 && state.event_form.field != 2 => {
+            state.event_form.field = (state.event_form.field + 1) % n_fields;
+        }
+        KeyCode::Up if state.event_form.field != 0 && state.event_form.field != 2 => {
+            state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields;
+        }
+        KeyCode::Left | KeyCode::Char('h') if state.event_form.field == 3 => {
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + n - 1) % n;
         }
-        KeyCode::Right if state.event_form.field == 3 => {
+        KeyCode::Right | KeyCode::Char('l') if state.event_form.field == 3 => {
             let n = state.groups_cache.len() + 1;
             state.event_form.group_idx = (state.event_form.group_idx + 1) % n;
+        }
+        KeyCode::Char('j') if state.event_form.field == 3 => {
+            state.event_form.field = (state.event_form.field + 1) % n_fields;
+        }
+        KeyCode::Char('k') if state.event_form.field == 3 => {
+            state.event_form.field = (state.event_form.field + n_fields - 1) % n_fields;
         }
         KeyCode::Left => match state.event_form.field {
             0 => { state.event_form.title.move_left(); }
@@ -2070,11 +2287,17 @@ fn handle_group_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
     match key.code {
         KeyCode::Tab => state.group_form.field = (state.group_form.field + 1) % 2,
         KeyCode::BackTab => state.group_form.field = (state.group_form.field + 1) % 2,
-        KeyCode::Left if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
+        KeyCode::Down | KeyCode::Up => {
+            state.group_form.field = (state.group_form.field + 1) % 2;
+        }
+        KeyCode::Left | KeyCode::Char('h') if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
             state.group_form.color_idx = (state.group_form.color_idx + COLOR_PRESETS.len() - 1) % COLOR_PRESETS.len();
         }
-        KeyCode::Right if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
+        KeyCode::Right | KeyCode::Char('l') if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
             state.group_form.color_idx = (state.group_form.color_idx + 1) % COLOR_PRESETS.len();
+        }
+        KeyCode::Char('j') | KeyCode::Char('k') if state.group_form.field == 1 && state.group_form.color_custom.is_empty() => {
+            state.group_form.field = (state.group_form.field + 1) % 2;
         }
         KeyCode::Left if state.group_form.field == 0 => {
             state.group_form.name.move_left();
@@ -2247,16 +2470,21 @@ fn spawn_agent(state: &mut RuntimeState) {
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
 
-    let mut child = Command::new("uv")
-        .args([
+    let mut cmd = Command::new("uv");
+    cmd.args([
             "run",
             "--project", agent_project.to_str().unwrap_or("."),
             "python", "-m", "agent.main",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(agent_stderr)
-        .spawn()
+        .stderr(agent_stderr);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn()
         .unwrap_or_else(|e| {
             eprintln!("{}", state.locale.errors.agent_start.replace("{error}", &e.to_string()));
             eprintln!("Install uv: brew install uv  (or https://astral.sh/uv)");
@@ -2389,8 +2617,8 @@ fn spawn_sync_daemon(state: &mut RuntimeState) {
         .map(Stdio::from)
         .unwrap_or_else(|_| Stdio::null());
 
-    let child_result = Command::new("uv")
-        .args([
+    let mut sync_cmd = Command::new("uv");
+    sync_cmd.args([
             "run",
             "--project", agent_project.to_str().unwrap_or("."),
             "--extra", "gcal",
@@ -2402,8 +2630,13 @@ fn spawn_sync_daemon(state: &mut RuntimeState) {
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(sync_stderr)
-        .spawn();
+        .stderr(sync_stderr);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        sync_cmd.process_group(0);
+    }
+    let child_result = sync_cmd.spawn();
 
     let mut child = match child_result {
         Ok(c) => c,
@@ -2525,6 +2758,29 @@ fn run_gcal_oauth(state: &mut RuntimeState) {
     });
 }
 
+/// Kill a child process and its entire process group.
+/// On Unix, sends SIGTERM to the process group, then SIGKILL if it doesn't exit.
+/// On non-Unix, falls back to `child.kill()`.
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        // Send SIGTERM to the process group (negative pid = group)
+        unsafe { libc::kill(-pid, libc::SIGTERM); }
+        // Give it a moment to exit gracefully
+        std::thread::sleep(Duration::from_millis(100));
+        if let Ok(Some(_)) = child.try_wait() { return; }
+        // Force kill the group
+        unsafe { libc::kill(-pid, libc::SIGKILL); }
+        let _ = child.wait();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 fn shutdown_sync_daemon(state: &mut RuntimeState) {
     if let Some(ref mut stdin) = state.sync_stdin {
         let cmd = "{\"command\":\"stop\"}\n";
@@ -2539,8 +2795,7 @@ fn shutdown_sync_daemon(state: &mut RuntimeState) {
             match child.try_wait() {
                 Ok(Some(_)) => break,
                 Ok(None) if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_process_tree(child);
                     break;
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(50)),
@@ -2663,8 +2918,7 @@ fn send_shutdown(state: &mut RuntimeState) {
             match child.try_wait() {
                 Ok(Some(_)) => break,
                 Ok(None) if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_process_tree(child);
                     break;
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(50)),
@@ -2672,6 +2926,7 @@ fn send_shutdown(state: &mut RuntimeState) {
             }
         }
     }
+    state.agent_child = None;
 }
 
 fn read_agent_output(state: &mut RuntimeState) {
@@ -2685,14 +2940,26 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
         MessageType::AgentInitAck => {
             if let Ok(Some(p)) = env.payload_as::<AgentInitAckPayload>() {
                 if let Some(notice) = p.provider_notice {
-                    state.chat_history.push(ChatMsg { role: ChatRole::System, text: notice });
+                    state.chat_history.push(ChatMsg { role: ChatRole::System, text: notice, note_results: None });
                 }
             }
         }
         MessageType::AgentReply => {
             if let Ok(Some(p)) = env.payload_as::<AgentReplyPayload>() {
-                state.chat_history.push(ChatMsg { role: ChatRole::Agent, text: p.text });
-                state.chat_scroll = 0; // auto-scroll to bottom on new message
+                let note_results = state.last_note_results.take()
+                    .filter(|v| !v.is_empty());
+                let msg_idx = state.chat_history.len();
+                state.chat_history.push(ChatMsg {
+                    role: ChatRole::Agent,
+                    text: p.text,
+                    note_results: note_results.clone(),
+                });
+                if note_results.is_some() {
+                    state.note_picker_active = true;
+                    state.note_picker_cursor = 0;
+                    state.note_picker_msg_idx = Some(msg_idx);
+                }
+                state.chat_scroll = 0;
             }
             state.pending_request = None;
             state.app.status_bar = state.locale.status.ready.clone();
@@ -2736,6 +3003,22 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
             };
 
             let response = jinx::ipc_handler::handle_storage_request(&env, &state.storage);
+
+            // Capture note results for the interactive picker (only search, not list)
+            if matches!(mt, MessageType::StorageSearchNotes) {
+                if let Some(payload) = response.payload.as_ref() {
+                    if let Some(notes_arr) = payload.get("notes").and_then(|v| v.as_array()) {
+                        let entries: Vec<NotePickerEntry> = notes_arr.iter().filter_map(|n| {
+                            Some(NotePickerEntry {
+                                id: n.get("id")?.as_i64()?,
+                                title: n.get("title")?.as_str()?.to_string(),
+                                updated_at: n.get("updated_at")?.as_str()?.to_string(),
+                            })
+                        }).collect();
+                        state.last_note_results = Some(entries);
+                    }
+                }
+            }
 
             // Trigger Google Calendar push for event and task mutations
             if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
@@ -2823,6 +3106,11 @@ fn is_storage_message_type(mt: MessageType) -> bool {
             | MessageType::StorageDeleteGroup
             | MessageType::StorageExportMarkdown
             | MessageType::StorageExportSqlite
+            | MessageType::StorageListNotes
+            | MessageType::StorageSearchNotes
+            | MessageType::StorageCreateNote
+            | MessageType::StorageUpdateNote
+            | MessageType::StorageDeleteNote
     )
 }
 
@@ -2879,6 +3167,7 @@ fn render(frame: &mut ratatui::Frame, state: &mut RuntimeState) {
         Panel::Chat => render_chat(frame, state, chunks[1]),
         Panel::Tareas => render_tareas(frame, state, chunks[1]),
         Panel::Calendario => render_calendario(frame, state, chunks[1]),
+        Panel::Notas => render_notas(frame, state, chunks[1]),
     }
 
     render_status(frame, state, chunks[2]);
@@ -2894,11 +3183,13 @@ fn render_tabs(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         Panel::Chat => 0,
         Panel::Tareas => 1,
         Panel::Calendario => 2,
+        Panel::Notas => 3,
     };
     let tabs = Tabs::new(vec![
         format!("  {}  ", state.locale.panels.chat),
         format!("  {}  ", state.locale.panels.tasks),
         format!("  {}  ", state.locale.panels.calendar),
+        format!("  {}  ", state.locale.panels.notes),
     ])
         .select(active)
         .block(Block::default().borders(Borders::ALL))
@@ -2948,7 +3239,7 @@ fn render_modal(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         Some(Modal::NewTask) | Some(Modal::EditTask { .. }) => render_task_form(frame, state, popup),
         Some(Modal::NewEvent) | Some(Modal::EditEvent { .. }) => render_event_form(frame, state, popup),
         Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => render_group_form(frame, state, popup),
-        Some(Modal::DeleteTask { .. }) | Some(Modal::DeleteEvent { .. }) | Some(Modal::DeleteGroup { .. }) => {
+        Some(Modal::DeleteTask { .. }) | Some(Modal::DeleteEvent { .. }) | Some(Modal::DeleteGroup { .. }) | Some(Modal::DeleteNote { .. }) => {
             render_delete_confirm(frame, state, popup);
         }
         Some(Modal::Settings) => render_settings_form(frame, state, popup),
@@ -3344,7 +3635,7 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
 
     // Build display lines for all messages
     let mut all_lines: Vec<Line<'static>> = Vec::new();
-    for msg in &state.chat_history {
+    for (msg_idx, msg) in state.chat_history.iter().enumerate() {
         let (label, color): (&str, Color) = match msg.role {
             ChatRole::Agent => (state.locale.chat.agent.as_str(), Color::Green),
             ChatRole::System => (state.locale.chat.system.as_str(), Color::Yellow),
@@ -3372,6 +3663,43 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
                 )));
             }
         }
+
+        // Render note picker entries if present
+        if let Some(entries) = &msg.note_results {
+            let is_active = state.note_picker_active
+                && state.note_picker_msg_idx == Some(msg_idx);
+            all_lines.push(Line::from(Span::styled(
+                "  ┌─────────────────────────────────────┐".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )));
+            for (i, entry) in entries.iter().enumerate() {
+                let cursor = if is_active && i == state.note_picker_cursor { "▶" } else { " " };
+                let title = if entry.title.is_empty() {
+                    &state.locale.misc.untitled_note
+                } else {
+                    &entry.title
+                };
+                let date = &entry.updated_at[..10.min(entry.updated_at.len())];
+                let label_text = format!("  │ {cursor} {title}  {date}");
+                let entry_style = if is_active && i == state.note_picker_cursor {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                all_lines.push(Line::from(Span::styled(label_text, entry_style)));
+            }
+            all_lines.push(Line::from(Span::styled(
+                "  └─────────────────────────────────────┘".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )));
+            if is_active {
+                all_lines.push(Line::from(Span::styled(
+                    "  ↑↓:select  Enter:open  Esc:close".to_string(),
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                )));
+            }
+        }
+
         all_lines.push(Line::from(""));
     }
 
@@ -3804,6 +4132,439 @@ fn spinner_state(pending: &Option<(Uuid, Instant)>) -> Option<(char, u64)> {
         let frame_idx = (elapsed.as_millis() / 250) as usize % SPINNER_FRAMES.len();
         (SPINNER_FRAMES[frame_idx], elapsed.as_secs())
     })
+}
+
+// ---------------------------------------------------------------------------
+// Notes panel
+// ---------------------------------------------------------------------------
+
+fn refresh_notes_cache(state: &mut RuntimeState) {
+    state.notes_cache = if state.notes_search_active && !state.notes_search_query.is_empty() {
+        state.storage.search_notes(&state.notes_search_query).unwrap_or_default()
+    } else {
+        state.storage.list_notes().unwrap_or_default()
+    };
+}
+
+fn handle_notas_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    match state.notes_view {
+        NotesView::List => handle_notes_list_key(state, key),
+        NotesView::Preview => handle_notes_preview_key(state, key),
+        NotesView::Edit => handle_notes_edit_key(state, key),
+    }
+}
+
+fn handle_notes_list_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    if state.notes_search_active {
+        match key.code {
+            KeyCode::Esc => {
+                state.notes_search_active = false;
+                state.notes_search_query.clear();
+                refresh_notes_cache(state);
+            }
+            KeyCode::Enter => {
+                state.notes_search_active = false;
+            }
+            KeyCode::Backspace => {
+                state.notes_search_query.pop();
+                refresh_notes_cache(state);
+                state.notes_cursor = 0;
+            }
+            KeyCode::Char(c) => {
+                state.notes_search_query.push(c);
+                refresh_notes_cache(state);
+                state.notes_cursor = 0;
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    let count = state.notes_cache.len();
+    let page = state.panel_area.map(|r| r.height as usize / 2).unwrap_or(10);
+
+    if state.notes_pending_g {
+        state.notes_pending_g = false;
+        if key.code == KeyCode::Char('g') && count > 0 {
+            state.notes_cursor = 0;
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Down | KeyCode::Char('j')
+            if count > 0 && state.notes_cursor + 1 < count =>
+        {
+            state.notes_cursor += 1;
+        }
+        KeyCode::Up | KeyCode::Char('k') if state.notes_cursor > 0 => {
+            state.notes_cursor -= 1;
+        }
+        KeyCode::Char('G') if count > 0 => {
+            state.notes_cursor = count - 1;
+        }
+        KeyCode::Char('g') => {
+            state.notes_pending_g = true;
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) && count > 0 => {
+            state.notes_cursor = (state.notes_cursor + page).min(count - 1);
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.notes_cursor = state.notes_cursor.saturating_sub(page);
+        }
+        KeyCode::Enter => {
+            if let Some(note) = state.notes_cache.get(state.notes_cursor) {
+                state.notes_current_id = Some(note.id);
+                state.notes_preview_scroll = 0;
+                state.notes_view = NotesView::Preview;
+            }
+        }
+        KeyCode::Char('n') => {
+            match state.storage.create_note(storage::NewNote {
+                title: String::new(),
+                body: String::new(),
+            }) {
+                Ok(note) => {
+                    state.notes_current_id = Some(note.id);
+                    state.notes_title_editor = TextEditor::new();
+                    state.notes_editor = TextEditor::new();
+                    state.notes_title_focused = true;
+                    state.notes_view = NotesView::Edit;
+                    refresh_notes_cache(state);
+                    state.notes_cursor = 0;
+                }
+                Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
+            }
+        }
+        KeyCode::Char('d') => {
+            if let Some(note) = state.notes_cache.get(state.notes_cursor) {
+                state.delete_confirm_name = note.title.clone();
+                state.app.modal = Some(Modal::DeleteNote { id: note.id });
+            }
+        }
+        KeyCode::Char('/') => {
+            state.notes_search_active = true;
+            state.notes_search_query.clear();
+        }
+        _ => {}
+    }
+}
+
+fn handle_notes_preview_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    match key.code {
+        KeyCode::Char('e') => {
+            if let Some(note) = state.notes_cache.iter().find(|n| Some(n.id) == state.notes_current_id) {
+                state.notes_title_editor = TextEditor::from_string(&note.title);
+                state.notes_editor = TextEditor::from_string(&note.body);
+                state.notes_title_focused = true;
+                state.notes_view = NotesView::Edit;
+            }
+        }
+        KeyCode::Esc => {
+            state.notes_view = NotesView::List;
+            state.notes_current_id = None;
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            state.notes_preview_scroll += 1;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.notes_preview_scroll = state.notes_preview_scroll.saturating_sub(1);
+        }
+        KeyCode::Char('d') => {
+            if let Some(id) = state.notes_current_id {
+                if let Some(note) = state.notes_cache.iter().find(|n| n.id == id) {
+                    state.delete_confirm_name = note.title.clone();
+                }
+                state.app.modal = Some(Modal::DeleteNote { id });
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_notes_edit_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    match key.code {
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            save_current_note(state);
+            state.notes_view = NotesView::Preview;
+        }
+        KeyCode::Esc => {
+            save_current_note(state);
+            state.notes_view = NotesView::Preview;
+        }
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.notes_title_focused = !state.notes_title_focused;
+        }
+        _ => {
+            if state.notes_title_focused {
+                match key.code {
+                    KeyCode::Enter => {
+                        state.notes_title_focused = false;
+                    }
+                    KeyCode::Char(c) => { state.notes_title_editor.insert_char(c); }
+                    KeyCode::Backspace => { state.notes_title_editor.backspace(); }
+                    KeyCode::Left => { state.notes_title_editor.move_left(); }
+                    KeyCode::Right => { state.notes_title_editor.move_right(); }
+                    KeyCode::Home => { state.notes_title_editor.move_home(); }
+                    KeyCode::End => { state.notes_title_editor.move_end(); }
+                    _ => {}
+                }
+            } else {
+                match key.code {
+                    KeyCode::Char(c) => {
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            match c {
+                                'u' => { state.notes_editor.kill_to_start(); }
+                                'k' => { state.notes_editor.kill_to_end(); }
+                                'a' => { state.notes_editor.move_home(); }
+                                'e' => { state.notes_editor.move_end(); }
+                                _ => {}
+                            }
+                        } else {
+                            state.notes_editor.insert_char(c);
+                        }
+                    }
+                    KeyCode::Enter => { state.notes_editor.insert_newline(); }
+                    KeyCode::Backspace => { state.notes_editor.backspace(); }
+                    KeyCode::Delete => { state.notes_editor.delete(); }
+                    KeyCode::Left => { state.notes_editor.move_left(); }
+                    KeyCode::Right => { state.notes_editor.move_right(); }
+                    KeyCode::Up => { state.notes_editor.move_up(); }
+                    KeyCode::Down => { state.notes_editor.move_down(); }
+                    KeyCode::Home => { state.notes_editor.move_home(); }
+                    KeyCode::End => { state.notes_editor.move_end(); }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn save_current_note(state: &mut RuntimeState) {
+    if let Some(id) = state.notes_current_id {
+        let title = state.notes_title_editor.to_string();
+        let body = state.notes_editor.to_string();
+        let title_val = if title.trim().is_empty() {
+            state.locale.misc.untitled_note.clone()
+        } else {
+            title
+        };
+        match state.storage.update_note(id, storage::NotePatch {
+            title: Some(title_val),
+            body: Some(body),
+        }) {
+            Ok(_) => {
+                state.app.status_bar = state.locale.status.note_saved.clone();
+                refresh_notes_cache(state);
+            }
+            Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
+        }
+    }
+}
+
+fn render_notas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
+    if state.notes_cache.is_empty() && state.notes_view == NotesView::List && !state.notes_search_active {
+        refresh_notes_cache(state);
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", state.locale.panels.notes));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    match state.notes_view {
+        NotesView::List => {
+            render_notes_list(frame, state, inner);
+        }
+        NotesView::Preview | NotesView::Edit => {
+            if inner.width >= 60 {
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+                    .split(inner);
+                render_notes_list(frame, state, cols[0]);
+                if state.notes_view == NotesView::Preview {
+                    render_note_preview(frame, state, cols[1]);
+                } else {
+                    render_note_edit(frame, state, cols[1]);
+                }
+            } else if state.notes_view == NotesView::Preview {
+                render_note_preview(frame, state, inner);
+            } else {
+                render_note_edit(frame, state, inner);
+            }
+        }
+    }
+}
+
+fn render_notes_list(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    if area.height < 2 {
+        return;
+    }
+
+    let available = area.height as usize;
+    let count = state.notes_cache.len();
+
+    if state.notes_search_active {
+        let query_line = format!(" /{}", state.notes_search_query);
+        let search_para = Paragraph::new(query_line).style(Style::default().fg(Color::Yellow));
+        let search_area = Rect { height: 1, ..area };
+        frame.render_widget(search_para, search_area);
+        let list_area = Rect { y: area.y + 1, height: area.height.saturating_sub(1), ..area };
+        render_notes_list_items(frame, state, list_area);
+        return;
+    }
+
+    if count == 0 {
+        let empty = Paragraph::new(state.locale.misc.no_notes.as_str())
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    render_notes_list_items(frame, state, area);
+    let _ = available;
+}
+
+fn render_notes_list_items(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    let count = state.notes_cache.len();
+    let available = area.height as usize;
+    let scroll = if state.notes_cursor >= state.notes_scroll + available {
+        state.notes_cursor - available + 1
+    } else if state.notes_cursor < state.notes_scroll {
+        state.notes_cursor
+    } else {
+        state.notes_scroll
+    };
+
+    let items: Vec<ListItem> = state.notes_cache.iter().enumerate()
+        .skip(scroll)
+        .take(available)
+        .map(|(i, note)| {
+            let cursor = if i == state.notes_cursor { "▶" } else { " " };
+            let title = if note.title.is_empty() {
+                &state.locale.misc.untitled_note
+            } else {
+                &note.title
+            };
+            let date = &note.updated_at[..10.min(note.updated_at.len())];
+            let label = format!("{cursor} {title}  {date}");
+            let style = if i == state.notes_cursor {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else if Some(note.id) == state.notes_current_id {
+                Style::default().fg(Color::White)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            ListItem::new(label).style(style)
+        })
+        .collect();
+
+    let list = List::new(items);
+    frame.render_widget(list, area);
+    let _ = count;
+}
+
+fn render_note_preview(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    let note = match state.notes_cache.iter().find(|n| Some(n.id) == state.notes_current_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(1)])
+        .split(area);
+
+    let title_display = if note.title.is_empty() {
+        &state.locale.misc.untitled_note
+    } else {
+        &note.title
+    };
+    let title_para = Paragraph::new(format!(" {title_display}"))
+        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    frame.render_widget(title_para, chunks[0]);
+
+    let width = chunks[1].width.saturating_sub(1) as usize;
+    let rendered = jinx::markdown::render_markdown(&note.body, width.max(10));
+    let total = rendered.len();
+    let avail = chunks[1].height as usize;
+    let scroll = state.notes_preview_scroll.min(total.saturating_sub(avail));
+    let visible: Vec<ratatui::text::Line<'_>> = rendered.into_iter().skip(scroll).take(avail).collect();
+    let body_para = Paragraph::new(visible);
+    frame.render_widget(body_para, chunks[1]);
+}
+
+fn render_note_edit(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(1)])
+        .split(area);
+
+    // Title line
+    let title_text = state.notes_title_editor.to_string();
+    let title_style = if state.notes_title_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let title_label = if state.notes_title_focused {
+        format!(" > {title_text}│")
+    } else {
+        format!("   {title_text}")
+    };
+    let title_para = Paragraph::new(title_label).style(title_style);
+    frame.render_widget(title_para, chunks[0]);
+
+    // Body
+    let body_style = if !state.notes_title_focused {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let input_w = chunks[1].width.saturating_sub(1) as usize;
+    let mut body_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+    for logical_line in state.notes_editor.lines() {
+        if input_w == 0 {
+            body_lines.push(ratatui::text::Line::from(logical_line.to_string()));
+        } else {
+            let chars: Vec<char> = logical_line.chars().collect();
+            if chars.is_empty() {
+                body_lines.push(ratatui::text::Line::from(String::new()));
+            } else {
+                for chunk in chars.chunks(input_w) {
+                    body_lines.push(ratatui::text::Line::from(chunk.iter().collect::<String>()));
+                }
+            }
+        }
+    }
+
+    let body_para = Paragraph::new(body_lines).style(body_style);
+    frame.render_widget(body_para, chunks[1]);
+
+    // Set cursor position in edit mode
+    if !state.notes_title_focused && input_w > 0 {
+        let (row, col) = (state.notes_editor.cursor_row(), state.notes_editor.cursor_col());
+        let mut visual_row: u16 = 0;
+        let mut visual_col: u16 = 0;
+        for (i, logical_line) in state.notes_editor.lines().iter().enumerate() {
+            let char_count = logical_line.chars().count();
+            let n_visual = (char_count / input_w) + 1;
+            if i == row {
+                visual_row += (col / input_w) as u16;
+                visual_col = (col % input_w) as u16;
+                break;
+            }
+            visual_row += n_visual as u16;
+        }
+        let x = chunks[1].x + visual_col;
+        let y = chunks[1].y + visual_row;
+        if x < chunks[1].x + chunks[1].width && y < chunks[1].y + chunks[1].height {
+            frame.set_cursor_position((x, y));
+        }
+    }
 }
 
 fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {

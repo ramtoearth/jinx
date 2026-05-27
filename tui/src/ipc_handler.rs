@@ -6,23 +6,26 @@
 use std::sync::Arc;
 
 use storage::{
-    EventPatch, HexColor, NewEvent, NewGroup, NewTask, Priority, Storage, StorageError, TaskFilter,
-    TaskPatch, TaskStatus,
+    EventPatch, HexColor, NewEvent, NewGroup, NewNote, NewTask, NotePatch, Priority, Storage,
+    StorageError, TaskFilter, TaskPatch, TaskStatus,
 };
 
 use crate::ipc::{
     Envelope, Kind, MessageType, StorageCompleteTaskRequest, StorageCompleteTaskResponse,
     StorageCreateEventRequest, StorageCreateEventResponse, StorageCreateGroupRequest,
-    StorageCreateGroupResponse, StorageCreateTaskRequest, StorageCreateTaskResponse,
-    StorageDeleteEventRequest, StorageDeleteEventResponse, StorageDeleteGroupRequest,
-    StorageDeleteGroupResponse, StorageDeleteTaskRequest, StorageDeleteTaskResponse,
-    StorageError as IpcError, StorageEventDto, StorageExportMarkdownRequest,
-    StorageExportMarkdownResponse, StorageExportSqliteRequest, StorageExportSqliteResponse,
-    StorageGroupDto, StorageListEventsRequest, StorageListEventsResponse, StorageListGroupsResponse,
-    StorageListTasksRequest, StorageListTasksResponse, StorageRenameGroupRequest,
+    StorageCreateGroupResponse, StorageCreateNoteRequest, StorageCreateNoteResponse,
+    StorageCreateTaskRequest, StorageCreateTaskResponse, StorageDeleteEventRequest,
+    StorageDeleteEventResponse, StorageDeleteGroupRequest, StorageDeleteGroupResponse,
+    StorageDeleteNoteRequest, StorageDeleteNoteResponse, StorageDeleteTaskRequest,
+    StorageDeleteTaskResponse, StorageError as IpcError, StorageEventDto,
+    StorageExportMarkdownRequest, StorageExportMarkdownResponse, StorageExportSqliteRequest,
+    StorageExportSqliteResponse, StorageGroupDto, StorageListEventsRequest,
+    StorageListEventsResponse, StorageListGroupsResponse, StorageListNotesResponse,
+    StorageListTasksRequest, StorageListTasksResponse, StorageNoteDto, StorageRenameGroupRequest,
     StorageRenameGroupResponse, StorageRecolorGroupRequest, StorageRecolorGroupResponse,
-    StorageTaskDto, StorageUpdateEventRequest, StorageUpdateEventResponse,
-    StorageUpdateTaskRequest, StorageUpdateTaskResponse,
+    StorageSearchNotesRequest, StorageSearchNotesResponse, StorageTaskDto,
+    StorageUpdateEventRequest, StorageUpdateEventResponse, StorageUpdateNoteRequest,
+    StorageUpdateNoteResponse, StorageUpdateTaskRequest, StorageUpdateTaskResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -66,6 +69,16 @@ fn group_to_dto(g: storage::Group) -> StorageGroupDto {
         id: g.id,
         name: g.name,
         color: g.color.to_string(),
+    }
+}
+
+fn note_to_dto(n: storage::Note) -> StorageNoteDto {
+    StorageNoteDto {
+        id: n.id,
+        title: n.title,
+        body: n.body,
+        created_at: n.created_at,
+        updated_at: n.updated_at,
     }
 }
 
@@ -406,6 +419,94 @@ pub fn handle_storage_request(
             }
         }
 
+        // ------------------------------------------------------------------
+        // Notes
+        // ------------------------------------------------------------------
+        MessageType::StorageListNotes => {
+            match storage.list_notes() {
+                Ok(notes) => response_base.clone()
+                    .with_payload(&StorageListNotesResponse {
+                        notes: notes.into_iter().map(note_to_dto).collect(),
+                    })
+                    .unwrap_or(response_base),
+                Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+            }
+        }
+
+        MessageType::StorageSearchNotes => {
+            let req: Option<StorageSearchNotesRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => {
+                    match storage.search_notes(&r.query) {
+                        Ok(notes) => response_base.clone()
+                            .with_payload(&StorageSearchNotesResponse {
+                                notes: notes.into_iter().map(note_to_dto).collect(),
+                            })
+                            .unwrap_or(response_base),
+                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    }
+                }
+            }
+        }
+
+        MessageType::StorageCreateNote => {
+            let req: Option<StorageCreateNoteRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => {
+                    let input = NewNote {
+                        title: r.title,
+                        body: r.body,
+                    };
+                    match storage.create_note(input) {
+                        Ok(n) => response_base.clone()
+                            .with_payload(&StorageCreateNoteResponse { note: note_to_dto(n) })
+                            .unwrap_or(response_base),
+                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    }
+                }
+            }
+        }
+
+        MessageType::StorageUpdateNote => {
+            let req: Option<StorageUpdateNoteRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => {
+                    let patch = NotePatch {
+                        title: r.patch.title,
+                        body: r.patch.body,
+                    };
+                    match storage.update_note(r.id, patch) {
+                        Ok(n) => response_base.clone()
+                            .with_payload(&StorageUpdateNoteResponse { note: note_to_dto(n) })
+                            .unwrap_or(response_base),
+                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    }
+                }
+            }
+        }
+
+        MessageType::StorageDeleteNote => {
+            let req: Option<StorageDeleteNoteRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => {
+                    match storage.delete_note(r.id) {
+                        Ok(()) => response_base.clone()
+                            .with_payload(&StorageDeleteNoteResponse {})
+                            .unwrap_or(response_base),
+                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    }
+                }
+            }
+        }
+
         // Unhandled message types (not storage requests)
         _ => response_base.with_error(IpcError::new(
             "INTERNAL_ERROR",
@@ -434,5 +535,10 @@ pub fn is_storage_request(mt: MessageType) -> bool {
             | MessageType::StorageDeleteGroup
             | MessageType::StorageExportMarkdown
             | MessageType::StorageExportSqlite
+            | MessageType::StorageListNotes
+            | MessageType::StorageSearchNotes
+            | MessageType::StorageCreateNote
+            | MessageType::StorageUpdateNote
+            | MessageType::StorageDeleteNote
     )
 }

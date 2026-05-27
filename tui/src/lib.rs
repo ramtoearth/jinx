@@ -12,5 +12,6 @@ pub mod config;
 pub mod ipc;
 pub mod ipc_handler;
 pub mod locale;
+pub mod markdown;
 pub mod proximos;
 pub mod text_editor;

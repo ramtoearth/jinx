@@ -4,8 +4,6 @@ Each function calls ``StdioClient.send_request(type, payload)`` which writes a
 ``storage.*`` request envelope to stdout and blocks until the TUI responds.
 A ``StorageError`` is raised (and caught by the agent framework) if the TUI
 returns an error envelope.
-
-Requisitos 2.1–2.5, 3.1–3.5, 10.1–10.2, 11.3, 13.11, 15.1–15.5.
 """
 
 from __future__ import annotations
@@ -83,9 +81,13 @@ def list_tasks(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """List tasks, optionally filtered by status, group_id, and date range.
+    """List tasks, optionally filtered by status, group, and date range.
 
-    status: "pendiente" | "completada" | "cancelada"  (or English: pending/completed/cancelled)
+    status: "pendiente" | "completada" | "cancelada" (or English: pending/completed/cancelled)
+    group_id: filter by group ID, or omit for all groups
+    from_date: ISO 8601 datetime, e.g. "2026-05-01T00:00:00+00:00"
+    to_date: ISO 8601 datetime, e.g. "2026-05-31T23:59:59+00:00"
+    Returns a list of task dicts.
     """
     payload: Dict[str, Any] = {}
     if status is not None:
@@ -108,11 +110,14 @@ def create_task(
     deadline: Optional[str] = None,
     group_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Create a new task and return it.
+    """Create a new task.
 
-    priority: "alta" | "media" | "baja"  (or English: high/medium/low)
-    deadline: ISO 8601 absolute datetime with time, e.g. "2026-05-08T10:00:00+00:00".
+    title: task description
+    priority: "alta" | "media" | "baja" (or English: high/medium/low). Defaults to media.
+    deadline: ISO 8601 absolute datetime, e.g. "2026-05-08T10:00:00+00:00".
               Use T00:00:00 only when no specific time was mentioned by the user.
+    group_id: group ID (call find_group_by_name first to resolve a name to ID)
+    Returns the created task dict.
     """
     payload: Dict[str, Any] = {"title": title}
     if priority is not None:
@@ -135,10 +140,15 @@ def update_task(
     deadline: Optional[str] = None,
     group_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Update fields of a task. Only provided fields are changed.
+    """Update a task. Only pass the fields you want to change.
 
-    priority: "alta" | "media" | "baja"  (or English: high/medium/low)
-    status:   "pendiente" | "completada" | "cancelada"  (or English: pending/completed/cancelled)
+    id: task ID to update
+    title: new title text
+    priority: "alta" | "media" | "baja" (or English: high/medium/low)
+    status: "pendiente" | "completada" | "cancelada" (or English: pending/completed/cancelled)
+    deadline: ISO 8601 absolute datetime, e.g. "2026-05-08T10:00:00+00:00"
+    group_id: group ID (call find_group_by_name first to resolve a name to ID)
+    Returns the updated task dict.
     """
     patch: Dict[str, Any] = {}
     if title is not None:
@@ -158,7 +168,11 @@ def update_task(
 
 @tool
 def complete_task(id: int) -> Dict[str, Any]:
-    """Mark a task as completed."""
+    """Mark a task as completed by its ID.
+
+    id: task ID to complete
+    Returns the updated task dict with status "completada".
+    """
     result = _send("storage.complete_task", {"id": id})
     return result["task"]
 
@@ -166,7 +180,10 @@ def complete_task(id: int) -> Dict[str, Any]:
 
 @tool
 def delete_task(id: int) -> None:
-    """Delete a task permanently."""
+    """Delete a task permanently by its ID. This cannot be undone.
+
+    id: task ID to delete
+    """
     _send("storage.delete_task", {"id": id})
 
 
@@ -181,7 +198,13 @@ def list_events(
     to_date: Optional[str] = None,
     group_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """List events, optionally filtered by date range and group."""
+    """List calendar events, optionally filtered by date range.
+
+    from_date: start of range in YYYY-MM-DD format, e.g. "2026-05-01"
+    to_date: end of range in YYYY-MM-DD format, e.g. "2026-05-31"
+    group_id: filter by group ID, or omit for all groups
+    Returns a list of event dicts.
+    """
     payload: Dict[str, Any] = {}
     if from_date is not None:
         payload["from_date"] = from_date
@@ -202,7 +225,15 @@ def create_event(
     duration_minutes: Optional[int] = None,
     group_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Create a new calendar event and return it."""
+    """Create a new calendar event.
+
+    title: event name
+    start_date: date in YYYY-MM-DD format, e.g. "2026-05-28"
+    start_time: time in HH:MM format (24h), e.g. "14:30"
+    duration_minutes: length in minutes, or omit for no duration
+    group_id: group ID (call find_group_by_name first to resolve a name to ID)
+    Returns the created event dict.
+    """
     payload: Dict[str, Any] = {
         "title": title,
         "start_date": start_date,
@@ -226,7 +257,16 @@ def update_event(
     duration_minutes: Optional[int] = None,
     group_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Update fields of a calendar event."""
+    """Update a calendar event. Only pass the fields you want to change.
+
+    id: event ID to update
+    title: new event name
+    start_date: date in YYYY-MM-DD format, e.g. "2026-05-28"
+    start_time: time in HH:MM format (24h), e.g. "14:30"
+    duration_minutes: length in minutes
+    group_id: group ID (call find_group_by_name first to resolve a name to ID)
+    Returns the updated event dict.
+    """
     patch: Dict[str, Any] = {}
     if title is not None:
         patch["title"] = title
@@ -245,7 +285,10 @@ def update_event(
 
 @tool
 def delete_event(id: int) -> None:
-    """Delete a calendar event."""
+    """Delete a calendar event permanently by its ID. This cannot be undone.
+
+    id: event ID to delete
+    """
     _send("storage.delete_event", {"id": id})
 
 
@@ -256,7 +299,7 @@ def delete_event(id: int) -> None:
 
 @tool
 def list_groups() -> List[Dict[str, Any]]:
-    """List all groups."""
+    """List all groups. Returns a list of group dicts with id, name, and color."""
     result = _send("storage.list_groups")
     return result.get("groups", [])
 
@@ -266,6 +309,7 @@ def list_groups() -> List[Dict[str, Any]]:
 def find_group_by_name(name: str) -> Optional[Dict[str, Any]]:
     """Find a group by name (case-insensitive). Returns the group dict or None.
 
+    name: group name to search for
     ALWAYS call this before create_task/create_event when the user mentions a group name,
     to resolve the group name to its ID. Never guess a group_id.
     """
@@ -280,7 +324,12 @@ def find_group_by_name(name: str) -> Optional[Dict[str, Any]]:
 
 @tool
 def create_group(name: str, color: str) -> Dict[str, Any]:
-    """Create a new group (color as '#RRGGBB')."""
+    """Create a new group.
+
+    name: group name (must be unique, case-insensitive)
+    color: hex color in #RRGGBB format, e.g. "#FF5733"
+    Returns the created group dict.
+    """
     result = _send("storage.create_group", {"name": name, "color": color})
     return result["group"]
 
@@ -288,7 +337,12 @@ def create_group(name: str, color: str) -> Dict[str, Any]:
 
 @tool
 def rename_group(id: int, name: str) -> Dict[str, Any]:
-    """Rename a group."""
+    """Rename a group.
+
+    id: group ID (call find_group_by_name to resolve a name to ID)
+    name: new group name
+    Returns the updated group dict.
+    """
     result = _send("storage.rename_group", {"id": id, "name": name})
     return result["group"]
 
@@ -296,7 +350,12 @@ def rename_group(id: int, name: str) -> Dict[str, Any]:
 
 @tool
 def recolor_group(id: int, color: str) -> Dict[str, Any]:
-    """Change a group's colour."""
+    """Change a group's color.
+
+    id: group ID (call find_group_by_name to resolve a name to ID)
+    color: hex color in #RRGGBB format, e.g. "#FF5733"
+    Returns the updated group dict.
+    """
     result = _send("storage.recolor_group", {"id": id, "color": color})
     return result["group"]
 
@@ -304,7 +363,10 @@ def recolor_group(id: int, color: str) -> Dict[str, Any]:
 
 @tool
 def delete_group(id: int) -> None:
-    """Delete a group (tasks/events lose their group_id)."""
+    """Delete a group permanently. Tasks and events in this group will have their group removed.
+
+    id: group ID to delete
+    """
     _send("storage.delete_group", {"id": id})
 
 
@@ -315,7 +377,11 @@ def delete_group(id: int) -> None:
 
 @tool
 def export_markdown(output_path: str) -> str:
-    """Export all data to a Markdown file and return the written path."""
+    """Export all data to a Markdown file.
+
+    output_path: absolute file path to write, e.g. "/tmp/export.md"
+    Returns the written file path.
+    """
     result = _send("storage.export_markdown", {"output_path": output_path})
     return result["written_path"]
 
@@ -323,7 +389,11 @@ def export_markdown(output_path: str) -> str:
 
 @tool
 def export_sqlite(output_path: str) -> str:
-    """Export all data to a SQLite file and return the written path."""
+    """Export all data to a SQLite file.
+
+    output_path: absolute file path to write, e.g. "/tmp/export.sqlite3"
+    Returns the written file path.
+    """
     result = _send("storage.export_sqlite", {"output_path": output_path})
     return result["written_path"]
 
@@ -337,3 +407,115 @@ def sync_google() -> str:
     """
     result = _send("storage.sync_google")
     return result.get("status", "Sync completed.")
+
+
+# ---------------------------------------------------------------------------
+# Notes
+# ---------------------------------------------------------------------------
+
+
+def _snippet(body: str, term: str, context_lines: int = 5) -> str:
+    """Extract a window of lines around the first match of term in body."""
+    lines = body.split("\n")
+    term_lower = term.lower()
+    match_idx = None
+    for i, line in enumerate(lines):
+        if term_lower in line.lower():
+            match_idx = i
+            break
+    if match_idx is None:
+        return "\n".join(lines[:context_lines * 2])
+    start = max(0, match_idx - context_lines)
+    end = min(len(lines), match_idx + context_lines + 1)
+    snippet = "\n".join(lines[start:end])
+    if start > 0:
+        snippet = "...\n" + snippet
+    if end < len(lines):
+        snippet = snippet + "\n..."
+    return snippet
+
+
+@tool
+def list_notes() -> List[Dict[str, Any]]:
+    """List all notes, ordered by most recently updated first.
+
+    Returns a list of note dicts with id, title, body (first 10 lines), created_at, updated_at.
+    """
+    result = _send("storage.list_notes")
+    notes = result.get("notes", [])
+    for note in notes:
+        if note.get("body"):
+            lines = note["body"].split("\n")
+            if len(lines) > 10:
+                note["body"] = "\n".join(lines[:10]) + "\n..."
+    return notes
+
+
+
+@tool
+def search_notes(search_term: str) -> List[Dict[str, Any]]:
+    """Search notes by title or body content (case-insensitive).
+
+    search_term: plain text to search for, e.g. "David" or "despensa".
+                 Pass a simple string, not JSON.
+    Returns notes where title or body contains the search_term (body is a snippet around the match).
+    """
+    import json as _j
+    import re as _re
+    try:
+        parsed = _j.loads(search_term)
+        if isinstance(parsed, dict):
+            search_term = parsed.get("query") or parsed.get("search_term") or search_term
+    except (ValueError, TypeError):
+        pass
+    m = _re.search(r'["\']?\s*:\s*["\'](.+?)["\']', search_term)
+    if m and ('"' in search_term or "query" in search_term or "search_term" in search_term):
+        search_term = m.group(1)
+    result = _send("storage.search_notes", {"query": search_term})
+    notes = result.get("notes", [])
+    for note in notes:
+        if note.get("body"):
+            note["body"] = _snippet(note["body"], search_term)
+    return notes
+
+
+
+@tool
+def create_note(title: str, body: str = "") -> Dict[str, Any]:
+    """Create a new note.
+
+    title: note title
+    body: note content, supports markdown (headers, lists, bold, code blocks)
+    Returns the created note dict.
+    """
+    result = _send("storage.create_note", {"title": title, "body": body})
+    return result["note"]
+
+
+
+@tool
+def update_note(id: int, title: Optional[str] = None, body: Optional[str] = None) -> Dict[str, Any]:
+    """Update a note. Only pass the fields you want to change.
+
+    id: note ID to update
+    title: new title text
+    body: new body content (markdown supported)
+    Returns the updated note dict.
+    """
+    patch: Dict[str, Any] = {}
+    if title is not None:
+        patch["title"] = title
+    if body is not None:
+        patch["body"] = body
+    result = _send("storage.update_note", {"id": id, "patch": patch})
+    return result["note"]
+
+
+
+@tool
+def delete_note(id: int) -> None:
+    """Delete a note permanently by its ID. This cannot be undone.
+
+    id: note ID to delete
+    """
+    _send("storage.delete_note", {"id": id})

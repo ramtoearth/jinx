@@ -116,6 +116,11 @@ def _build_agent(
         st.export_markdown,
         st.export_sqlite,
         st.sync_google,
+        st.list_notes,
+        st.search_notes,
+        st.create_note,
+        st.update_note,
+        st.delete_note,
     ]
 
     import json as _json

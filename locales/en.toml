@@ -2,6 +2,7 @@
 chat = "Chat"
 tasks = "Tasks"
 calendar = "Calendar"
+notes = "Notes"
 
 [modals]
 new_task = "New Task"
@@ -13,6 +14,7 @@ edit_group = "Edit Group"
 filter_tasks = "Filter Tasks"
 settings = "Settings"
 confirm_delete = "Confirm deletion"
+delete_note = "Delete Note"
 
 [form_labels]
 title = "Title"
@@ -46,6 +48,8 @@ group_deleted = "Group deleted."
 task_completed = "Task completed."
 task_pending = "Task marked as pending."
 config_saved = "Settings saved. Agent restarted."
+note_saved = "Note saved."
+note_deleted = "Note deleted."
 ready = "Ready."
 
 [errors]
@@ -80,6 +84,9 @@ date_input_inactive = "(Enter to activate, Tab next)"
 no_date = "(no date)"
 color_hint = "  In Color: ←/→ presets or type #RRGGBB, then Backspace to return to presets"
 delete_prompt = "  Press  y  to confirm  or  n / Esc  to cancel."
+notes_list = "  ↑↓:nav  n:new  Enter:open  d:del  /:search"
+notes_preview = "  e:edit  Esc:back  j/k:scroll  d:del"
+notes_edit = "  Ctrl+S:save  Esc:back  Ctrl+T:title/body"
 
 [filters]
 pending = "pending"
@@ -123,3 +130,6 @@ item_kind = "item"
 today_marker = "* {date} (today)"
 custom_color = "{color} (custom)"
 preset_color = "← {color} → (preset {idx}/{total})"
+no_notes = "  (no notes)"
+note_kind = "note"
+untitled_note = "Untitled"

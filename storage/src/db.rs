@@ -8,7 +8,7 @@ use crate::{
     Storage, StorageError,
     models::{
         Event, EventPatch, Group, GroupInfo, GroupsSnapshot, HexColor, NewEvent, NewGroup,
-        NewTask, Priority, Task, TaskFilter, TaskPatch, TaskStatus,
+        NewNote, NewTask, Note, NotePatch, Priority, Task, TaskFilter, TaskPatch, TaskStatus,
     },
 };
 
@@ -105,6 +105,17 @@ static MIGRATIONS: &[&str] = &[
         tasks_last_sync TEXT
     );
     INSERT OR IGNORE INTO sync_state (id) VALUES (1);
+    "#,
+    // Migration 8: Quick Notes table.
+    r#"
+    CREATE TABLE IF NOT EXISTS notes (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        title      TEXT    NOT NULL,
+        body       TEXT    NOT NULL DEFAULT '',
+        created_at TEXT    NOT NULL,
+        updated_at TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC);
     "#,
 ];
 
@@ -209,6 +220,16 @@ fn map_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<Group> {
         id: row.get(0)?,
         name: row.get(1)?,
         color: HexColor::new(color_str).unwrap_or_else(|_| HexColor::new("#808080").unwrap()),
+    })
+}
+
+fn map_note(row: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
+    Ok(Note {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        body: row.get(2)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
     })
 }
 
@@ -796,6 +817,78 @@ impl Storage for SqliteStorage {
             .flatten();
         Ok(result)
     }
+
+    // -------------------------------------------------------------------
+    // Notes
+    // -------------------------------------------------------------------
+
+    fn list_notes(&self) -> Result<Vec<Note>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, title, body, created_at, updated_at FROM notes ORDER BY updated_at DESC")
+            .map_err(StorageError::from)?;
+        let rows = stmt.query_map([], map_note).map_err(StorageError::from)?;
+        let mut notes = vec![];
+        for row in rows {
+            notes.push(row.map_err(StorageError::from)?);
+        }
+        Ok(notes)
+    }
+
+    fn search_notes(&self, query: &str) -> Result<Vec<Note>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{query}%");
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, body, created_at, updated_at FROM notes
+                 WHERE title LIKE ?1 OR body LIKE ?1
+                 ORDER BY updated_at DESC",
+            )
+            .map_err(StorageError::from)?;
+        let rows = stmt.query_map(params![pattern], map_note).map_err(StorageError::from)?;
+        let mut notes = vec![];
+        for row in rows {
+            notes.push(row.map_err(StorageError::from)?);
+        }
+        Ok(notes)
+    }
+
+    fn create_note(&self, input: NewNote) -> Result<Note, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let ts = now_iso();
+        conn.execute(
+            "INSERT INTO notes (title, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![input.title, input.body, ts, ts],
+        )
+        .map_err(StorageError::from)?;
+        let id = conn.last_insert_rowid();
+        self.get_note_by_id(&conn, id)
+    }
+
+    fn update_note(&self, id: i64, patch: NotePatch) -> Result<Note, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let existing = self.get_note_by_id(&conn, id)?;
+        let title = patch.title.unwrap_or(existing.title);
+        let body = patch.body.unwrap_or(existing.body);
+        let updated_at = now_iso();
+        conn.execute(
+            "UPDATE notes SET title=?1, body=?2, updated_at=?3 WHERE id=?4",
+            params![title, body, updated_at, id],
+        )
+        .map_err(StorageError::from)?;
+        self.get_note_by_id(&conn, id)
+    }
+
+    fn delete_note(&self, id: i64) -> Result<(), StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute("DELETE FROM notes WHERE id=?1", params![id])
+            .map_err(StorageError::from)?;
+        if affected == 0 {
+            return Err(StorageError::NotFound(format!("Note {id} not found")));
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -836,5 +929,16 @@ impl SqliteStorage {
         .optional()
         .map_err(StorageError::from)?
         .ok_or_else(|| StorageError::NotFound(format!("Group {id} not found")))
+    }
+
+    fn get_note_by_id(&self, conn: &Connection, id: i64) -> Result<Note, StorageError> {
+        conn.query_row(
+            "SELECT id, title, body, created_at, updated_at FROM notes WHERE id=?1",
+            params![id],
+            map_note,
+        )
+        .optional()
+        .map_err(StorageError::from)?
+        .ok_or_else(|| StorageError::NotFound(format!("Note {id} not found")))
     }
 }

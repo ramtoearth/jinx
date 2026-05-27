@@ -32,6 +32,7 @@ pub struct Panels {
     pub chat: String,
     pub tasks: String,
     pub calendar: String,
+    pub notes: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -45,6 +46,7 @@ pub struct Modals {
     pub filter_tasks: String,
     pub settings: String,
     pub confirm_delete: String,
+    pub delete_note: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,6 +84,8 @@ pub struct StatusMessages {
     pub task_completed: String,
     pub task_pending: String,
     pub config_saved: String,
+    pub note_saved: String,
+    pub note_deleted: String,
     pub ready: String,
 }
 
@@ -120,6 +124,9 @@ pub struct Hints {
     pub no_date: String,
     pub color_hint: String,
     pub delete_prompt: String,
+    pub notes_list: String,
+    pub notes_preview: String,
+    pub notes_edit: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -169,6 +176,9 @@ pub struct Misc {
     pub today_marker: String,
     pub custom_color: String,
     pub preset_color: String,
+    pub no_notes: String,
+    pub note_kind: String,
+    pub untitled_note: String,
 }
 
 #[cfg(test)]
