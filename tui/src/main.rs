@@ -278,20 +278,22 @@ struct SettingsFormState {
 
 #[derive(Clone)]
 struct FilterFormState {
-    status_idx: usize,    // 0=pendiente, 1=todas, 2=completada, 3=cancelada
-    priority_idx: usize,  // 0=todas, 1=alta, 2=media, 3=baja
-    group_idx: usize,     // 0=todos, 1..N=grupo, N+1=sin grupo
-    date_idx: usize,      // 0=todas, 1=hoy, 2=ayer, 3=esta semana, 4=semana pasada, 5=este mes, 6=custom
+    status_idx: usize,        // 0=pendiente, 1=todas, 2=completada, 3=cancelada
+    priority_sel: [bool; 3],  // [alta, media, baja] — multi-select toggles
+    priority_cursor: usize,   // 0=alta, 1=media, 2=baja — which one is highlighted
+    group_idx: usize,         // 0=todos, 1..N=grupo, N+1=sin grupo
+    date_idx: usize,          // 0=todas, 1=hoy, 2=ayer, 3=esta semana, 4=semana pasada, 5=este mes, 6=custom, 7=sin fecha
     date_from: DateTimeInput,
     date_to: DateTimeInput,
-    field: usize,         // 0=status, 1=priority, 2=group, 3=fecha, 4=desde, 5=hasta
+    field: usize,             // 0=status, 1=priority, 2=group, 3=fecha, 4=desde, 5=hasta
 }
 
 impl Default for FilterFormState {
     fn default() -> Self {
         Self {
             status_idx: 0,
-            priority_idx: 0,
+            priority_sel: [false; 3],
+            priority_cursor: 0,
             group_idx: 0,
             date_idx: 0,
             date_from: DateTimeInput::date_only_disabled(),
@@ -321,6 +323,7 @@ enum DateInputResult {
     NextField,
     PrevField,
     Submit,
+    Cancel,
 }
 
 #[derive(Clone)]
@@ -579,6 +582,7 @@ impl DateTimeInput {
                 self.commit_typing_buf();
                 DateInputResult::Submit
             }
+            KeyCode::Esc => DateInputResult::Cancel,
             _ => DateInputResult::Consumed,
         }
     }
@@ -717,9 +721,10 @@ enum NotesView {
 struct ActiveTaskFilter {
     status: Option<TaskStatus>,
     group_id: Option<Option<i64>>,
-    priority: Option<Priority>,
+    priorities: Vec<Priority>,
     from_date: Option<String>,
     to_date: Option<String>,
+    no_deadline: bool,
 }
 
 impl Default for ActiveTaskFilter {
@@ -727,9 +732,10 @@ impl Default for ActiveTaskFilter {
         Self {
             status: Some(TaskStatus::Pendiente),
             group_id: None,
-            priority: None,
+            priorities: Vec::new(),
             from_date: None,
             to_date: None,
+            no_deadline: false,
         }
     }
 }
@@ -741,15 +747,17 @@ impl ActiveTaskFilter {
             group_id: self.group_id,
             from_date: self.from_date.clone(),
             to_date: self.to_date.clone(),
+            no_deadline: self.no_deadline,
         }
     }
 
     fn is_default(&self) -> bool {
         self.status == Some(TaskStatus::Pendiente)
             && self.group_id.is_none()
-            && self.priority.is_none()
+            && self.priorities.is_empty()
             && self.from_date.is_none()
             && self.to_date.is_none()
+            && !self.no_deadline
     }
 }
 
@@ -1059,6 +1067,16 @@ fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
             let trimmed = text.trim().to_string();
             if trimmed.is_empty() {
                 state.app.status_bar = state.locale.errors.empty_message.clone();
+                return;
+            }
+            if trimmed == "/clear" {
+                state.chat_editor.clear();
+                state.chat_history.clear();
+                state.chat_scroll = 0;
+                state.note_picker_active = false;
+                state.note_picker_msg_idx = None;
+                state.pending_request = None;
+                restart_agent(state);
                 return;
             }
             state.prompt_history.push(trimmed.clone());
@@ -1443,8 +1461,8 @@ fn get_filtered_tasks(state: &RuntimeState) -> Vec<storage::Task> {
         .storage
         .list_tasks(state.tareas_filter.to_storage_filter())
         .unwrap_or_default();
-    if let Some(p) = state.tareas_filter.priority {
-        tasks.retain(|t| t.priority == p);
+    if !state.tareas_filter.priorities.is_empty() {
+        tasks.retain(|t| state.tareas_filter.priorities.contains(&t.priority));
     }
     tasks
 }
@@ -1645,31 +1663,40 @@ fn open_edit_group_modal(state: &mut RuntimeState, id: i64) {
 
 fn open_filter_modal(state: &mut RuntimeState) {
     refresh_groups_cache(state);
-    let (date_idx, date_from, date_to) = match (&state.tareas_filter.from_date, &state.tareas_filter.to_date) {
-        (None, None) => (0, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled()),
-        (Some(f), Some(t)) => {
-            let today = today_str();
-            let yesterday = yesterday_str();
-            let (wk_m, wk_s) = week_bounds();
-            let (lw_m, lw_s) = last_week_bounds();
-            let (mo_f, mo_l) = month_bounds();
-            if f == &today && t == &today {
-                (1, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
-            } else if f == &yesterday && t == &yesterday {
-                (2, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
-            } else if f == &wk_m && t == &wk_s {
-                (3, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
-            } else if f == &lw_m && t == &lw_s {
-                (4, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
-            } else if f == &mo_f && t == &mo_l {
-                (5, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
-            } else {
-                (6, DateTimeInput::from_iso(f, false), DateTimeInput::from_iso(t, false))
+    let (date_idx, date_from, date_to) = if state.tareas_filter.no_deadline {
+        (7, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+    } else {
+        match (&state.tareas_filter.from_date, &state.tareas_filter.to_date) {
+            (None, None) => (0, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled()),
+            (Some(f), Some(t)) => {
+                let today = today_str();
+                let yesterday = yesterday_str();
+                let (wk_m, wk_s) = week_bounds();
+                let (lw_m, lw_s) = last_week_bounds();
+                let (mo_f, mo_l) = month_bounds();
+                if f == &today && t == &today {
+                    (1, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+                } else if f == &yesterday && t == &yesterday {
+                    (2, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+                } else if f == &wk_m && t == &wk_s {
+                    (3, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+                } else if f == &lw_m && t == &lw_s {
+                    (4, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+                } else if f == &mo_f && t == &mo_l {
+                    (5, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
+                } else {
+                    (6, DateTimeInput::from_iso(f, false), DateTimeInput::from_iso(t, false))
+                }
             }
+            (Some(f), None) => (6, DateTimeInput::from_iso(f, false), DateTimeInput::date_only_disabled()),
+            (None, Some(t)) => (6, DateTimeInput::date_only_disabled(), DateTimeInput::from_iso(t, false)),
         }
-        (Some(f), None) => (6, DateTimeInput::from_iso(f, false), DateTimeInput::date_only_disabled()),
-        (None, Some(t)) => (6, DateTimeInput::date_only_disabled(), DateTimeInput::from_iso(t, false)),
     };
+    let priority_sel = [
+        state.tareas_filter.priorities.contains(&Priority::Alta),
+        state.tareas_filter.priorities.contains(&Priority::Media),
+        state.tareas_filter.priorities.contains(&Priority::Baja),
+    ];
     state.filter_form = FilterFormState {
         status_idx: match state.tareas_filter.status {
             Some(TaskStatus::Pendiente) => 0,
@@ -1677,12 +1704,8 @@ fn open_filter_modal(state: &mut RuntimeState) {
             Some(TaskStatus::Completada) => 2,
             Some(TaskStatus::Cancelada) => 3,
         },
-        priority_idx: match state.tareas_filter.priority {
-            None => 0,
-            Some(Priority::Alta) => 1,
-            Some(Priority::Media) => 2,
-            Some(Priority::Baja) => 3,
-        },
+        priority_sel,
+        priority_cursor: 0,
         group_idx: match state.tareas_filter.group_id {
             None => 0,
             Some(Some(gid)) => {
@@ -1718,6 +1741,10 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
                 apply_filter(state);
                 return;
             }
+            DateInputResult::Cancel => {
+                state.app.modal = None;
+                return;
+            }
         }
     }
     if state.filter_form.field == 5 && is_custom {
@@ -1733,6 +1760,10 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
             }
             DateInputResult::Submit => {
                 apply_filter(state);
+                return;
+            }
+            DateInputResult::Cancel => {
+                state.app.modal = None;
                 return;
             }
         }
@@ -1757,29 +1788,38 @@ fn handle_filter_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
         }
         KeyCode::Left | KeyCode::Char('h') => match state.filter_form.field {
             0 => state.filter_form.status_idx = (state.filter_form.status_idx + 3) % 4,
-            1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 3) % 4,
+            1 => state.filter_form.priority_cursor = (state.filter_form.priority_cursor + 2) % 3,
             2 => {
                 let n = n_groups + 2;
                 state.filter_form.group_idx = (state.filter_form.group_idx + n - 1) % n;
             }
-            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 6) % 7,
+            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 7) % 8,
             _ => {}
         },
         KeyCode::Right | KeyCode::Char('l') => match state.filter_form.field {
             0 => state.filter_form.status_idx = (state.filter_form.status_idx + 1) % 4,
-            1 => state.filter_form.priority_idx = (state.filter_form.priority_idx + 1) % 4,
+            1 => state.filter_form.priority_cursor = (state.filter_form.priority_cursor + 1) % 3,
             2 => {
                 let n = n_groups + 2;
                 state.filter_form.group_idx = (state.filter_form.group_idx + 1) % n;
             }
-            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 1) % 7,
+            3 => state.filter_form.date_idx = (state.filter_form.date_idx + 1) % 8,
             _ => {}
         },
+        KeyCode::Char(' ') if state.filter_form.field == 1 => {
+            let c = state.filter_form.priority_cursor;
+            state.filter_form.priority_sel[c] = !state.filter_form.priority_sel[c];
+        }
         KeyCode::Char('r') => {
             state.filter_form = FilterFormState::default();
         }
         KeyCode::Enter => {
-            apply_filter(state);
+            if state.filter_form.field == 1 {
+                let c = state.filter_form.priority_cursor;
+                state.filter_form.priority_sel[c] = !state.filter_form.priority_sel[c];
+            } else {
+                apply_filter(state);
+            }
         }
         KeyCode::Esc => {
             state.app.modal = None;
@@ -1846,21 +1886,20 @@ fn apply_filter(state: &mut RuntimeState) {
         3 => Some(TaskStatus::Cancelada),
         _ => Some(TaskStatus::Pendiente),
     };
-    state.tareas_filter.priority = match form.priority_idx {
-        0 => None,
-        1 => Some(Priority::Alta),
-        2 => Some(Priority::Media),
-        3 => Some(Priority::Baja),
-        _ => None,
-    };
+    let mut priorities = Vec::new();
+    if form.priority_sel[0] { priorities.push(Priority::Alta); }
+    if form.priority_sel[1] { priorities.push(Priority::Media); }
+    if form.priority_sel[2] { priorities.push(Priority::Baja); }
+    state.tareas_filter.priorities = priorities;
     let n_groups = state.groups_cache.len();
     state.tareas_filter.group_id = match form.group_idx {
         0 => None,
         i if i <= n_groups => Some(Some(state.groups_cache[i - 1].id)),
         _ => Some(None),
     };
+    state.tareas_filter.no_deadline = form.date_idx == 7;
     let (from_date, to_date) = match form.date_idx {
-        0 => (None, None),
+        0 | 7 => (None, None),
         1 => { let t = today_str(); (Some(t.clone()), Some(t)) }
         2 => { let y = yesterday_str(); (Some(y.clone()), Some(y)) }
         3 => { let (m, s) = week_bounds(); (Some(m), Some(s)) }
@@ -2159,6 +2198,11 @@ fn handle_task_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEven
                 save_task(state);
                 return;
             }
+            DateInputResult::Cancel => {
+                state.app.modal = None;
+                state.task_form.error = None;
+                return;
+            }
         }
     }
 
@@ -2224,6 +2268,11 @@ fn handle_event_form_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
             }
             DateInputResult::Submit => {
                 save_event(state);
+                return;
+            }
+            DateInputResult::Cancel => {
+                state.app.modal = None;
+                state.event_form.error = None;
                 return;
             }
         }
@@ -3302,7 +3351,6 @@ fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Re
         state.locale.filters.cancelled.as_str(),
     ];
     let priority_labels = [
-        state.locale.filters.all.as_str(),
         state.locale.filters.high.as_str(),
         state.locale.filters.medium.as_str(),
         state.locale.filters.low.as_str(),
@@ -3322,6 +3370,7 @@ fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Re
         state.locale.filters.last_week.as_str(),
         state.locale.filters.this_month.as_str(),
         state.locale.filters.custom.as_str(),
+        state.locale.filters.no_date_filter.as_str(),
     ];
 
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
@@ -3330,11 +3379,40 @@ fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Re
         format!("← {} →", status_labels[form.status_idx]),
         form.field == 0,
     ));
-    lines.push(form_line(
-        state.locale.form_labels.priority.as_str(),
-        format!("← {} →", priority_labels[form.priority_idx]),
-        form.field == 1,
-    ));
+
+    // Priority multi-select: show checkboxes with cursor highlight
+    {
+        let field_active = form.field == 1;
+        let label_style = if field_active {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let mut spans: Vec<Span<'static>> = vec![
+            Span::styled(format!("  {:16}", state.locale.form_labels.priority.as_str()), label_style),
+        ];
+        for (i, plabel) in priority_labels.iter().enumerate() {
+            let checked = if form.priority_sel[i] { "[x]" } else { "[ ]" };
+            let is_cursor = field_active && form.priority_cursor == i;
+            let style = if is_cursor {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else if form.priority_sel[i] {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            spans.push(Span::styled(format!("{}{}", checked, plabel), style));
+            if i < 2 { spans.push(Span::raw(" ")); }
+        }
+        if !form.priority_sel.iter().any(|&s| s) {
+            spans.push(Span::styled(
+                format!(" ({})", state.locale.filters.all.as_str()),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+
     lines.push(form_line(
         state.locale.form_labels.group.as_str(),
         format!("← {} →", group_label),
@@ -3842,11 +3920,14 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
             Some(TaskStatus::Cancelada) => state.locale.filters.cancelled.as_str(),
             None => state.locale.filters.all.as_str(),
         };
-        let priority_label = match state.tareas_filter.priority {
-            Some(Priority::Alta) => state.locale.filters.high.as_str(),
-            Some(Priority::Media) => state.locale.filters.medium.as_str(),
-            Some(Priority::Baja) => state.locale.filters.low.as_str(),
-            None => state.locale.filters.all.as_str(),
+        let priority_label: String = if state.tareas_filter.priorities.is_empty() {
+            state.locale.filters.all.to_string()
+        } else {
+            state.tareas_filter.priorities.iter().map(|p| match p {
+                Priority::Alta => state.locale.filters.high.as_str(),
+                Priority::Media => state.locale.filters.medium.as_str(),
+                Priority::Baja => state.locale.filters.low.as_str(),
+            }).collect::<Vec<_>>().join("+")
         };
         let group_label = match &state.tareas_filter.group_id {
             None => state.locale.filters.all_groups.clone(),
@@ -3857,16 +3938,20 @@ fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rec
                 .map(|g| g.name.clone())
                 .unwrap_or_else(|| "?".to_string()),
         };
-        let date_label = match (&state.tareas_filter.from_date, &state.tareas_filter.to_date) {
-            (None, None) => String::new(),
-            (Some(f), Some(t)) if f == t => format!("  {}:{}", state.locale.form_labels.date.trim(), f),
-            (Some(f), Some(t)) => format!("  {}:{}/{}", state.locale.form_labels.date.trim(), f, t),
-            (Some(f), None) => format!("  {}:{}", state.locale.form_labels.from_date.trim(), f),
-            (None, Some(t)) => format!("  {}:{}", state.locale.form_labels.to_date.trim(), t),
+        let date_label = if state.tareas_filter.no_deadline {
+            format!("  {}:{}", state.locale.form_labels.date.trim(), state.locale.filters.no_date_filter.as_str())
+        } else {
+            match (&state.tareas_filter.from_date, &state.tareas_filter.to_date) {
+                (None, None) => String::new(),
+                (Some(f), Some(t)) if f == t => format!("  {}:{}", state.locale.form_labels.date.trim(), f),
+                (Some(f), Some(t)) => format!("  {}:{}/{}", state.locale.form_labels.date.trim(), f, t),
+                (Some(f), None) => format!("  {}:{}", state.locale.form_labels.from_date.trim(), f),
+                (None, Some(t)) => format!("  {}:{}", state.locale.form_labels.to_date.trim(), t),
+            }
         };
         let filter_line = state.locale.filters.filters_prefix
             .replace("{status}", status_label)
-            .replace("{priority}", priority_label)
+            .replace("{priority}", &priority_label)
             .replace("{group}", &group_label)
             .replace("{date}", &date_label);
         task_items.push(ListItem::new(Line::from(Span::styled(

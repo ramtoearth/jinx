@@ -207,6 +207,7 @@ pub struct TaskFilter {
     pub group_id: Option<Option<i64>>,
     pub from_date: Option<String>,
     pub to_date: Option<String>,
+    pub no_deadline: bool,
 }
 
 // ---------------------------------------------------------------------------
