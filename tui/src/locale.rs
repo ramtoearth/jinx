@@ -144,6 +144,7 @@ pub struct Filters {
     pub last_week: String,
     pub this_month: String,
     pub custom: String,
+    pub no_date_filter: String,
     pub no_group: String,
     pub all_groups: String,
     pub none: String,

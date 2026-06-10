@@ -121,6 +121,7 @@ pub fn handle_storage_request(
                 group_id: req.group_id,
                 from_date: req.from_date,
                 to_date: req.to_date,
+                no_deadline: false,
             };
             match storage.list_tasks(filter) {
                 Ok(tasks) => response_base.clone()
