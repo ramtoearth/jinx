@@ -4249,13 +4249,18 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area:
     }
     let mut entry_idx = 0usize;
     let mut today_line_idx: Option<usize> = None;
+    let mut today_entry_idx: Option<usize> = None;
+    let mut current_date_is_today_or_later = false;
     let mut cursor_line_idx: usize = 0;
 
     for item in &flat {
         match item {
             FlatCalEntry::DateHeader(date) => {
-                if date == &today {
+                if today_line_idx.is_none() && date.as_str() >= today.as_str() {
                     today_line_idx = Some(lines.len());
+                    current_date_is_today_or_later = true;
+                }
+                if date == &today {
                     let label = state.locale.misc.today_marker.replace("{date}", date);
                     lines.push(
                         ListItem::new(label)
@@ -4269,6 +4274,9 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area:
                 }
             }
             FlatCalEntry::Entry(entry) => {
+                if today_entry_idx.is_none() && current_date_is_today_or_later {
+                    today_entry_idx = Some(entry_idx);
+                }
                 let selected = entry_idx == state.calendar_cursor;
                 if selected {
                     cursor_line_idx = lines.len();
@@ -4308,12 +4316,17 @@ fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeState, area:
 
     let visible_height = inner.height as usize;
 
-    if !state.calendar_scroll_initialized && today_line_idx.is_some() {
-        state.calendar_scroll = today_line_idx.unwrap_or(0);
+    if !state.calendar_scroll_initialized {
+        if let Some(idx) = today_entry_idx {
+            state.calendar_cursor = idx;
+        }
+        if let Some(line_idx) = today_line_idx {
+            state.calendar_scroll = line_idx;
+        }
+        let max_scroll = lines.len().saturating_sub(visible_height);
+        state.calendar_scroll = state.calendar_scroll.min(max_scroll);
         state.calendar_scroll_initialized = true;
-    }
-
-    if !lines.is_empty() && visible_height > 0 {
+    } else if !lines.is_empty() && visible_height > 0 {
         if cursor_line_idx < state.calendar_scroll {
             state.calendar_scroll = cursor_line_idx;
         } else if cursor_line_idx >= state.calendar_scroll + visible_height {
