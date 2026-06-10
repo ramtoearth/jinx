@@ -45,6 +45,19 @@ use jinx::ipc::{
 use jinx::text_editor::TextEditor;
 
 // ---------------------------------------------------------------------------
+// Slash-command registry
+// ---------------------------------------------------------------------------
+
+struct SlashCommand {
+    name: &'static str,
+    description: &'static str,
+}
+
+const SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand { name: "clear", description: "Borrar chat y reiniciar agente" },
+];
+
+// ---------------------------------------------------------------------------
 // Platform-aware log path
 // ---------------------------------------------------------------------------
 
@@ -824,6 +837,10 @@ struct RuntimeState {
     note_picker_active: bool,
     note_picker_cursor: usize,
     note_picker_msg_idx: Option<usize>,
+    // Slash-command picker
+    cmd_picker_active: bool,
+    cmd_picker_cursor: usize,
+    cmd_picker_filtered: Vec<usize>,
     // Layout rects for mouse hit-testing
     panel_area: Option<Rect>,
     input_area: Option<Rect>,
@@ -897,6 +914,9 @@ fn run_app(
         note_picker_active: false,
         note_picker_cursor: 0,
         note_picker_msg_idx: None,
+        cmd_picker_active: false,
+        cmd_picker_cursor: 0,
+        cmd_picker_filtered: Vec::new(),
         panel_area: None,
         input_area: None,
         history_area: None,
@@ -1013,6 +1033,27 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     }
 }
 
+fn update_cmd_picker(state: &mut RuntimeState) {
+    let text = state.chat_editor.to_string();
+    if text.starts_with('/') && state.chat_editor.line_count() == 1 {
+        let query = &text[1..];
+        let filtered: Vec<usize> = SLASH_COMMANDS.iter().enumerate()
+            .filter(|(_, cmd)| cmd.name.starts_with(query))
+            .map(|(i, _)| i)
+            .collect();
+        if !filtered.is_empty() {
+            state.cmd_picker_active = true;
+            state.cmd_picker_filtered = filtered;
+            state.cmd_picker_cursor = state.cmd_picker_cursor.min(
+                state.cmd_picker_filtered.len().saturating_sub(1)
+            );
+            return;
+        }
+    }
+    state.cmd_picker_active = false;
+    state.cmd_picker_filtered.clear();
+}
+
 fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     // Note picker intercepts keys when active
     if state.note_picker_active {
@@ -1059,6 +1100,48 @@ fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
             }
         }
         state.note_picker_active = false;
+    }
+
+    // Slash-command picker intercepts keys when active
+    if state.cmd_picker_active {
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let max = state.cmd_picker_filtered.len();
+                if state.cmd_picker_cursor + 1 < max {
+                    state.cmd_picker_cursor += 1;
+                }
+                return;
+            }
+            KeyCode::Up | KeyCode::Char('k') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if state.cmd_picker_cursor > 0 {
+                    state.cmd_picker_cursor -= 1;
+                }
+                return;
+            }
+            KeyCode::Tab => {
+                if let Some(&idx) = state.cmd_picker_filtered.get(state.cmd_picker_cursor) {
+                    let full = format!("/{}", SLASH_COMMANDS[idx].name);
+                    state.chat_editor = TextEditor::from_string(&full);
+                }
+                update_cmd_picker(state);
+                return;
+            }
+            KeyCode::Enter => {
+                if let Some(&idx) = state.cmd_picker_filtered.get(state.cmd_picker_cursor) {
+                    let full = format!("/{}", SLASH_COMMANDS[idx].name);
+                    state.chat_editor = TextEditor::from_string(&full);
+                    state.cmd_picker_active = false;
+                }
+                // Fall through to the Enter handler below to execute
+            }
+            KeyCode::Esc => {
+                state.cmd_picker_active = false;
+                return;
+            }
+            _ => {
+                // Fall through to normal key handling; update_cmd_picker runs at the end
+            }
+        }
     }
 
     match key.code {
@@ -1175,6 +1258,8 @@ fn handle_chat_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         }
         _ => {}
     }
+
+    update_cmd_picker(state);
 }
 
 fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
@@ -3835,6 +3920,38 @@ fn render_chat(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect)
     }
     let input_para = Paragraph::new(input_lines);
     frame.render_widget(input_para, input_inner);
+
+    // Slash-command picker overlay
+    if state.cmd_picker_active && !state.cmd_picker_filtered.is_empty() {
+        let picker_height = (state.cmd_picker_filtered.len() as u16 + 2).min(6);
+        let picker_area = Rect {
+            x: parts[1].x,
+            y: parts[1].y.saturating_sub(picker_height),
+            width: parts[1].width.min(40),
+            height: picker_height,
+        };
+        let picker_block = Block::default().borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let picker_inner = picker_block.inner(picker_area);
+        frame.render_widget(Clear, picker_area);
+        frame.render_widget(picker_block, picker_area);
+
+        let mut cmd_lines: Vec<Line<'static>> = Vec::new();
+        for (i, &cmd_idx) in state.cmd_picker_filtered.iter().enumerate() {
+            let cmd = &SLASH_COMMANDS[cmd_idx];
+            let cursor_mark = if i == state.cmd_picker_cursor { "▶" } else { " " };
+            let style = if i == state.cmd_picker_cursor {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            cmd_lines.push(Line::from(Span::styled(
+                format!("{} /{:<12} {}", cursor_mark, cmd.name, cmd.description),
+                style,
+            )));
+        }
+        frame.render_widget(Paragraph::new(cmd_lines), picker_inner);
+    }
 
     // Set cursor position (only when Chat panel is focused and no modal)
     if state.app.focused_panel == Panel::Chat && state.app.modal.is_none() {
