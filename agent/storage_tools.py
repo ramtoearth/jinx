@@ -104,6 +104,31 @@ def list_tasks(
 
 
 @tool
+def search_tasks(query: str) -> List[Dict[str, Any]]:
+    """Search tasks by title (case-insensitive). Returns all matching tasks regardless of status.
+
+    query: text to search for in task titles, e.g. "community builder" or "deploy".
+           Pass a simple string, not JSON.
+    Use this when the user asks to find, locate, or check for tasks by name/topic.
+    Returns a list of matching task dicts (may include completed/cancelled tasks).
+    """
+    import json as _j
+    import re as _re
+    try:
+        parsed = _j.loads(query)
+        if isinstance(parsed, dict):
+            query = parsed.get("query") or parsed.get("search_term") or query
+    except (ValueError, TypeError):
+        pass
+    m = _re.search(r'["\']?\s*:\s*["\'](.+?)["\']', query)
+    if m and ('"' in query or "query" in query or "search_term" in query):
+        query = m.group(1)
+    result = _send("storage.search_tasks", {"query": query})
+    return result.get("tasks", [])
+
+
+
+@tool
 def create_task(
     title: str,
     priority: Optional[str] = None,

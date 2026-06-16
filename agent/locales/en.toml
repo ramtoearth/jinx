@@ -16,6 +16,12 @@ Important rules:
 - Only call storage tools with absolute values, never with relative references.
 - Always respond in the user's language.
 
+Search rules:
+- When the user asks to find, search, check, or look for tasks by name or topic,
+  use search_tasks(query) with the relevant keywords. This tool searches task
+  titles across ALL statuses (pending, completed, cancelled).
+- To search notes by content, use search_notes(search_term).
+
 Group rules:
 - Assign group_id ONLY if the user explicitly mentions a group by name.
   If not mentioned, omit group_id (null). Never ask the user about the group.

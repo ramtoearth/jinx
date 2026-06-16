@@ -352,6 +352,28 @@ impl Storage for SqliteStorage {
         Ok(tasks)
     }
 
+    fn search_tasks(&self, query: &str) -> Result<Vec<Task>, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{query}%");
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, priority, status, created_at, deadline, group_id, google_event_id, push_pending
+                 FROM tasks
+                 WHERE title LIKE ?1
+                 ORDER BY
+                   CASE priority WHEN 'alta' THEN 1 WHEN 'media' THEN 2 ELSE 3 END,
+                   CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
+                   deadline ASC",
+            )
+            .map_err(StorageError::from)?;
+        let rows = stmt.query_map(params![pattern], map_task).map_err(StorageError::from)?;
+        let mut tasks = vec![];
+        for row in rows {
+            tasks.push(row.map_err(StorageError::from)?);
+        }
+        Ok(tasks)
+    }
+
     fn create_task(&self, input: NewTask) -> Result<Task, StorageError> {
         let conn = self.conn.lock().unwrap();
         let priority = input.priority.unwrap_or(Priority::Media);

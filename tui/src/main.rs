@@ -3225,6 +3225,7 @@ fn is_storage_message_type(mt: MessageType) -> bool {
     matches!(
         mt,
         MessageType::StorageListTasks
+            | MessageType::StorageSearchTasks
             | MessageType::StorageCreateTask
             | MessageType::StorageUpdateTask
             | MessageType::StorageCompleteTask

@@ -194,6 +194,8 @@ pub enum MessageType {
     // --- Storage: tasks ----------------------------------------------------
     #[serde(rename = "storage.list_tasks")]
     StorageListTasks,
+    #[serde(rename = "storage.search_tasks")]
+    StorageSearchTasks,
     #[serde(rename = "storage.create_task")]
     StorageCreateTask,
     #[serde(rename = "storage.update_task")]
@@ -458,6 +460,16 @@ pub struct StorageListTasksRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StorageListTasksResponse {
+    pub tasks: Vec<StorageTaskDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageSearchTasksRequest {
+    pub query: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageSearchTasksResponse {
     pub tasks: Vec<StorageTaskDto>,
 }
 

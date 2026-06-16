@@ -31,6 +31,7 @@ use std::path::PathBuf;
 /// invoke on the Almacén.
 pub trait Storage {
     fn list_tasks(&self, filter: TaskFilter) -> Result<Vec<Task>, StorageError>;
+    fn search_tasks(&self, query: &str) -> Result<Vec<Task>, StorageError>;
     fn create_task(&self, input: NewTask) -> Result<Task, StorageError>;
     fn update_task(&self, id: i64, patch: TaskPatch) -> Result<Task, StorageError>;
     fn complete_task(&self, id: i64) -> Result<Task, StorageError>;

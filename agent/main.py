@@ -99,6 +99,7 @@ def _build_agent(
 
     tools = _BUILTIN_TOOLS + [
         st.list_tasks,
+        st.search_tasks,
         st.create_task,
         st.update_task,
         st.complete_task,
