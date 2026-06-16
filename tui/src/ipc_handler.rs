@@ -18,7 +18,8 @@ use crate::ipc::{
     StorageDeleteEventResponse, StorageDeleteGroupRequest, StorageDeleteGroupResponse,
     StorageDeleteNoteRequest, StorageDeleteNoteResponse, StorageDeleteTaskRequest,
     StorageDeleteTaskResponse, StorageError as IpcError, StorageEventDto,
-    StorageExportMarkdownRequest, StorageExportMarkdownResponse, StorageExportSqliteRequest,
+    StorageExportMarkdownRequest, StorageExportMarkdownResponse, StorageExportNoteRequest,
+    StorageExportNoteResponse, StorageExportSqliteRequest,
     StorageExportSqliteResponse, StorageGroupDto, StorageListEventsRequest,
     StorageListEventsResponse, StorageListGroupsResponse, StorageListNotesResponse,
     StorageListTasksRequest, StorageListTasksResponse, StorageNoteDto, StorageRenameGroupRequest,
@@ -525,6 +526,25 @@ pub fn handle_storage_request(
             }
         }
 
+        MessageType::StorageExportNote => {
+            let req: Option<StorageExportNoteRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => {
+                    let path = std::path::Path::new(&r.output_path);
+                    match storage.export_note(r.id, path) {
+                        Ok(p) => response_base.clone()
+                            .with_payload(&StorageExportNoteResponse {
+                                written_path: p.to_string_lossy().to_string(),
+                            })
+                            .unwrap_or(response_base),
+                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    }
+                }
+            }
+        }
+
         // Unhandled message types (not storage requests)
         _ => response_base.with_error(IpcError::new(
             "INTERNAL_ERROR",
@@ -559,5 +579,6 @@ pub fn is_storage_request(mt: MessageType) -> bool {
             | MessageType::StorageCreateNote
             | MessageType::StorageUpdateNote
             | MessageType::StorageDeleteNote
+            | MessageType::StorageExportNote
     )
 }

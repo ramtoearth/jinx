@@ -47,6 +47,8 @@ pub struct Modals {
     pub settings: String,
     pub confirm_delete: String,
     pub delete_note: String,
+    #[serde(default)]
+    pub export_note: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -86,6 +88,8 @@ pub struct StatusMessages {
     pub config_saved: String,
     pub note_saved: String,
     pub note_deleted: String,
+    #[serde(default)]
+    pub note_exported: String,
     pub ready: String,
 }
 
@@ -127,6 +131,8 @@ pub struct Hints {
     pub notes_list: String,
     pub notes_preview: String,
     pub notes_edit: String,
+    #[serde(default)]
+    pub export_note: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

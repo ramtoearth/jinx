@@ -248,6 +248,8 @@ pub enum MessageType {
     StorageUpdateNote,
     #[serde(rename = "storage.delete_note")]
     StorageDeleteNote,
+    #[serde(rename = "storage.export_note")]
+    StorageExportNote,
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +720,17 @@ pub struct StorageDeleteNoteRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct StorageDeleteNoteResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageExportNoteRequest {
+    pub id: i64,
+    pub output_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageExportNoteResponse {
+    pub written_path: String,
+}
 
 // ---------------------------------------------------------------------------
 // Tests — minimal smoke checks wiring the types together. The full

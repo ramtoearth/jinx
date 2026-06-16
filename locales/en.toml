@@ -15,6 +15,7 @@ filter_tasks = "Filter Tasks"
 settings = "Settings"
 confirm_delete = "Confirm deletion"
 delete_note = "Delete Note"
+export_note = "Export Note"
 
 [form_labels]
 title = "Title"
@@ -50,6 +51,7 @@ task_pending = "Task marked as pending."
 config_saved = "Settings saved. Agent restarted."
 note_saved = "Note saved."
 note_deleted = "Note deleted."
+note_exported = "Note exported: {path}"
 ready = "Ready."
 
 [errors]
@@ -85,8 +87,9 @@ no_date = "(no date)"
 color_hint = "  In Color: ←/→ presets or type #RRGGBB, then Backspace to return to presets"
 delete_prompt = "  Press  y  to confirm  or  n / Esc  to cancel."
 notes_list = "  ↑↓:nav  n:new  Enter:open  d:del  /:search"
-notes_preview = "  e:edit  Esc:back  j/k:scroll  d:del"
+notes_preview = "  e:edit  Esc:back  j/k:scroll  d:del  s:export"
 notes_edit = "  Ctrl+S:save  Esc:back  Ctrl+T:title/body"
+export_note = "  ↑↓:nav  →:open  ←:parent  Enter:save  Esc:cancel"
 
 [filters]
 pending = "pending"

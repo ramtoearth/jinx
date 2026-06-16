@@ -122,6 +122,7 @@ def _build_agent(
         st.create_note,
         st.update_note,
         st.delete_note,
+        st.export_note,
     ]
 
     import json as _json

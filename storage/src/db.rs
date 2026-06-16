@@ -915,6 +915,19 @@ impl Storage for SqliteStorage {
         }
         Ok(())
     }
+
+    fn export_note(&self, id: i64, output_path: &std::path::Path) -> Result<std::path::PathBuf, StorageError> {
+        let conn = self.conn.lock().unwrap();
+        let note = self.get_note_by_id(&conn, id)?;
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| StorageError::IoNotWritable(format!("cannot create directory: {e}")))?;
+        }
+        let content = format!("# {}\n\n{}\n", note.title, note.body);
+        std::fs::write(output_path, &content)
+            .map_err(|e| StorageError::IoNotWritable(format!("cannot write file: {e}")))?;
+        Ok(output_path.to_path_buf())
+    }
 }
 
 // ---------------------------------------------------------------------------

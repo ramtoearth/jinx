@@ -544,3 +544,16 @@ def delete_note(id: int) -> None:
     id: note ID to delete
     """
     _send("storage.delete_note", {"id": id})
+
+
+@tool
+def export_note(id: int, output_path: str) -> str:
+    """Export a single note to a Markdown file.
+
+    id: note ID to export (call list_notes or search_notes first to find it)
+    output_path: absolute file path to write, e.g. "/tmp/my-note.md"
+    Do NOT use export_markdown for individual notes — that exports all tasks/events.
+    Returns the written file path.
+    """
+    result = _send("storage.export_note", {"id": id, "output_path": output_path})
+    return result["written_path"]

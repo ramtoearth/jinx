@@ -61,6 +61,7 @@ pub trait Storage {
     fn create_note(&self, input: NewNote) -> Result<Note, StorageError>;
     fn update_note(&self, id: i64, patch: NotePatch) -> Result<Note, StorageError>;
     fn delete_note(&self, id: i64) -> Result<(), StorageError>;
+    fn export_note(&self, id: i64, output_path: &std::path::Path) -> Result<PathBuf, StorageError>;
 
     fn mark_push_pending(&self, event_id: i64) -> Result<(), StorageError>;
     fn mark_task_push_pending(&self, task_id: i64) -> Result<(), StorageError>;

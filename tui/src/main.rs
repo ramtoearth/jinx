@@ -316,6 +316,63 @@ impl Default for FilterFormState {
     }
 }
 
+struct DirBrowserEntry {
+    name: String,
+    is_dir: bool,
+}
+
+struct DirBrowserState {
+    current_dir: std::path::PathBuf,
+    entries: Vec<DirBrowserEntry>,
+    cursor: usize,
+    scroll: usize,
+    filename: String,
+    field: usize, // 0 = browser, 1 = filename
+    note_id: i64,
+}
+
+impl Default for DirBrowserState {
+    fn default() -> Self {
+        Self {
+            current_dir: std::env::var("HOME").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::PathBuf::from("/")),
+            entries: Vec::new(),
+            cursor: 0,
+            scroll: 0,
+            filename: String::new(),
+            field: 0,
+            note_id: 0,
+        }
+    }
+}
+
+impl DirBrowserState {
+    fn refresh_entries(&mut self) {
+        self.entries.clear();
+        if let Ok(read_dir) = std::fs::read_dir(&self.current_dir) {
+            let mut dirs = Vec::new();
+            let mut files = Vec::new();
+            for entry in read_dir.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') {
+                    continue;
+                }
+                let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                if is_dir {
+                    dirs.push(DirBrowserEntry { name, is_dir: true });
+                } else {
+                    files.push(DirBrowserEntry { name, is_dir: false });
+                }
+            }
+            dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            self.entries.extend(dirs);
+            self.entries.extend(files);
+        }
+        self.cursor = 0;
+        self.scroll = 0;
+    }
+}
+
 impl GroupFormState {
     fn effective_color(&self) -> &str {
         if !self.color_custom.is_empty() {
@@ -837,6 +894,8 @@ struct RuntimeState {
     note_picker_active: bool,
     note_picker_cursor: usize,
     note_picker_msg_idx: Option<usize>,
+    // Directory browser (export note)
+    dir_browser: DirBrowserState,
     // Slash-command picker
     cmd_picker_active: bool,
     cmd_picker_cursor: usize,
@@ -914,6 +973,7 @@ fn run_app(
         note_picker_active: false,
         note_picker_cursor: 0,
         note_picker_msg_idx: None,
+        dir_browser: DirBrowserState::default(),
         cmd_picker_active: false,
         cmd_picker_cursor: 0,
         cmd_picker_filtered: Vec::new(),
@@ -2171,6 +2231,7 @@ fn save_settings(state: &mut RuntimeState) {
             enabled: state.settings_form.gcal_enabled,
             ..existing_cfg.google_calendar
         },
+        last_export_dir: existing_cfg.last_export_dir,
     };
     if let Err(e) = app_config::save(&cfg) {
         state.app.status_bar = state.locale.errors.config_save.replace("{error}", &e.to_string());
@@ -2246,6 +2307,7 @@ fn handle_modal_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         }),
         Some(Modal::Settings) => handle_settings_form_key(state, key),
         Some(Modal::FilterTasks) => handle_filter_form_key(state, key),
+        Some(Modal::ExportNote { .. }) => handle_export_note_key(state, key),
         _ => { if key.code == KeyCode::Esc { state.app.modal = None; } }
     }
 }
@@ -3246,6 +3308,7 @@ fn is_storage_message_type(mt: MessageType) -> bool {
             | MessageType::StorageCreateNote
             | MessageType::StorageUpdateNote
             | MessageType::StorageDeleteNote
+            | MessageType::StorageExportNote
     )
 }
 
@@ -3379,6 +3442,7 @@ fn render_modal(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         }
         Some(Modal::Settings) => render_settings_form(frame, state, popup),
         Some(Modal::FilterTasks) => render_filter_form(frame, state, popup),
+        Some(Modal::ExportNote { .. }) => render_export_note_modal(frame, state, popup),
         _ => {}
     }
 }
@@ -3419,6 +3483,88 @@ fn form_line_editor(label: &str, editor: &TextEditor, active: bool) -> Line<'sta
             Span::styled(text, vs),
         ])
     }
+}
+
+fn render_export_note_modal(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    let block = Block::default()
+        .title(state.locale.modals.export_note.as_str())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 5 || inner.width < 10 {
+        return;
+    }
+
+    let browser = &state.dir_browser;
+
+    // Layout: path line (1) + entries list (variable) + separator (1) + filename (1) + hint (1)
+    let path_area = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
+    let filename_area = Rect { x: inner.x, y: inner.y + inner.height - 2, width: inner.width, height: 1 };
+    let hint_area = Rect { x: inner.x, y: inner.y + inner.height - 1, width: inner.width, height: 1 };
+    let list_height = inner.height.saturating_sub(4);
+    let list_area = Rect { x: inner.x, y: inner.y + 1, width: inner.width, height: list_height };
+
+    // Path breadcrumb
+    let path_str = browser.current_dir.to_string_lossy();
+    let path_display = if path_str.len() > inner.width as usize - 2 {
+        format!("...{}", &path_str[path_str.len() - (inner.width as usize - 5)..])
+    } else {
+        path_str.to_string()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled(path_display, Style::default().fg(Color::Yellow)),
+        ])),
+        path_area,
+    );
+
+    // Entry list
+    let visible_start = if browser.cursor >= list_height as usize {
+        browser.cursor - list_height as usize + 1
+    } else {
+        0
+    };
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, entry) in browser.entries.iter().enumerate().skip(visible_start).take(list_height as usize) {
+        let is_selected = i == browser.cursor;
+        let icon = if entry.is_dir { " " } else { "  " };
+        let style = if is_selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else if entry.is_dir {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        lines.push(Line::from(Span::styled(format!(" {}{}", icon, entry.name), style)));
+    }
+    if browser.entries.is_empty() {
+        lines.push(Line::from(Span::styled("  (empty)", Style::default().fg(Color::DarkGray))));
+    }
+    frame.render_widget(Paragraph::new(lines), list_area);
+
+    // Filename field (always editable)
+    let fn_style = Style::default().fg(Color::Cyan);
+    let cursor_indicator = "│";
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" File: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(browser.filename.clone(), fn_style),
+            Span::styled(cursor_indicator.to_string(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        ])),
+        filename_area,
+    );
+
+    // Hint
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            state.locale.hints.export_note.clone(),
+            Style::default().fg(Color::DarkGray),
+        )),
+        hint_area,
+    );
 }
 
 fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
@@ -4494,6 +4640,86 @@ fn handle_notes_preview_key(state: &mut RuntimeState, key: crossterm::event::Key
                 state.app.modal = Some(Modal::DeleteNote { id });
             }
         }
+        KeyCode::Char('s') => {
+            if let Some(id) = state.notes_current_id {
+                if let Some(note) = state.notes_cache.iter().find(|n| n.id == id) {
+                    let cfg = app_config::load();
+                    let initial_dir = cfg.last_export_dir
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| std::env::var("HOME").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::PathBuf::from("/")));
+                    state.dir_browser.current_dir = initial_dir;
+                    state.dir_browser.note_id = id;
+                    let safe_title: String = note.title.chars()
+                        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+                        .collect();
+                    state.dir_browser.filename = format!("{}.md", safe_title.trim());
+                    state.dir_browser.field = 0;
+                    state.dir_browser.refresh_entries();
+                    state.app.modal = Some(Modal::ExportNote { id });
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_export_note_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    match key.code {
+        KeyCode::Esc => { state.app.modal = None; }
+        KeyCode::Up => {
+            if state.dir_browser.cursor > 0 {
+                state.dir_browser.cursor -= 1;
+            }
+        }
+        KeyCode::Down => {
+            if state.dir_browser.cursor + 1 < state.dir_browser.entries.len() {
+                state.dir_browser.cursor += 1;
+            }
+        }
+        KeyCode::Right => {
+            if let Some(entry) = state.dir_browser.entries.get(state.dir_browser.cursor) {
+                if entry.is_dir {
+                    state.dir_browser.current_dir = state.dir_browser.current_dir.join(&entry.name);
+                    state.dir_browser.refresh_entries();
+                }
+            }
+        }
+        KeyCode::Left => {
+            if let Some(parent) = state.dir_browser.current_dir.parent().map(|p| p.to_path_buf()) {
+                state.dir_browser.current_dir = parent;
+                state.dir_browser.refresh_entries();
+            }
+        }
+        KeyCode::Enter => {
+            let is_dir_selected = state.dir_browser.entries
+                .get(state.dir_browser.cursor)
+                .map(|e| e.is_dir)
+                .unwrap_or(false);
+            if is_dir_selected {
+                let name = state.dir_browser.entries[state.dir_browser.cursor].name.clone();
+                state.dir_browser.current_dir = state.dir_browser.current_dir.join(&name);
+                state.dir_browser.refresh_entries();
+            } else {
+                // Confirm export
+                let path = state.dir_browser.current_dir.join(&state.dir_browser.filename);
+                match state.storage.export_note(state.dir_browser.note_id, &path) {
+                    Ok(written) => {
+                        let msg = state.locale.status.note_exported
+                            .replace("{path}", &written.to_string_lossy());
+                        state.app.status_bar = msg;
+                        let mut cfg = app_config::load();
+                        cfg.last_export_dir = Some(state.dir_browser.current_dir.to_string_lossy().to_string());
+                        let _ = app_config::save(&cfg);
+                    }
+                    Err(e) => {
+                        state.app.status_bar = format!("Error: {}", e.message());
+                    }
+                }
+                state.app.modal = None;
+            }
+        }
+        KeyCode::Backspace => { state.dir_browser.filename.pop(); }
+        KeyCode::Char(c) => { state.dir_browser.filename.push(c); }
         _ => {}
     }
 }
@@ -4690,7 +4916,7 @@ fn render_note_preview(frame: &mut ratatui::Frame, state: &RuntimeState, area: R
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(1)])
+        .constraints([Constraint::Length(2), Constraint::Min(1), Constraint::Length(1)])
         .split(area);
 
     let title_display = if note.title.is_empty() {
@@ -4710,6 +4936,10 @@ fn render_note_preview(frame: &mut ratatui::Frame, state: &RuntimeState, area: R
     let visible: Vec<ratatui::text::Line<'_>> = rendered.into_iter().skip(scroll).take(avail).collect();
     let body_para = Paragraph::new(visible);
     frame.render_widget(body_para, chunks[1]);
+
+    let hint_para = Paragraph::new(state.locale.hints.notes_preview.as_str())
+        .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(hint_para, chunks[2]);
 }
 
 fn render_note_edit(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {

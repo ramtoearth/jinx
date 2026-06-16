@@ -70,6 +70,8 @@ pub struct Config {
     pub remote: RemoteConfig,
     #[serde(default)]
     pub google_calendar: GoogleCalendarConfig,
+    #[serde(default)]
+    pub last_export_dir: Option<String>,
 }
 
 fn default_language() -> String {
@@ -98,6 +100,7 @@ impl Default for Config {
                 llamaapi_model: "Llama-4-Maverick-17B-128E-Instruct-FP8".to_string(),
             },
             google_calendar: GoogleCalendarConfig::default(),
+            last_export_dir: None,
         }
     }
 }
