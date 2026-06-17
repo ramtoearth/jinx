@@ -8,8 +8,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
-use domain::{Group, Priority, TaskFilter, TaskStatus};
-use infrastructure::SqliteStorage;
+use jinx_core::{Group, Priority, TaskFilter, TaskStatus};
+use jinx_core::SqliteStorage;
 use uuid::Uuid;
 
 use jinx::app::AppState;
@@ -688,7 +688,7 @@ pub(crate) struct RuntimeState {
     pub(crate) delete_confirm_name: String,
     pub(crate) pending_g: bool,
     // Notes panel state
-    pub(crate) notes_cache: Vec<domain::Note>,
+    pub(crate) notes_cache: Vec<jinx_core::Note>,
     pub(crate) notes_cursor: usize,
     pub(crate) notes_scroll: usize,
     pub(crate) notes_view: NotesView,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use domain::{
+use crate::domain::{
     DomainError, Event,
     calendar::{EventPatch, EventRepository, NewEvent},
 };

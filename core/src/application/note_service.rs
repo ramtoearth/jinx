@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use domain::{
+use crate::domain::{
     DomainError, Note,
     note::{NewNote, NoteRepository, NotePatch},
 };

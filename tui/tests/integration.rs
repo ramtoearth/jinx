@@ -3,11 +3,11 @@
 
 use std::sync::Arc;
 
-use domain::{HexColor, NewEvent, NewGroup, NewTask, TaskFilter};
-use domain::task::TaskRepository;
-use domain::calendar::EventRepository;
-use domain::group::GroupRepository;
-use infrastructure::SqliteStorage;
+use jinx_core::{HexColor, NewEvent, NewGroup, NewTask, TaskFilter};
+use jinx_core::task::TaskRepository;
+use jinx_core::calendar::EventRepository;
+use jinx_core::group::GroupRepository;
+use jinx_core::SqliteStorage;
 use jinx::app::{AppEvent, AppState, Panel};
 use jinx::calendario::calendar_layout;
 use jinx::color::{resolve_style, ColorMode};

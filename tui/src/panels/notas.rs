@@ -4,7 +4,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
-use domain::note::NoteRepository;
+use jinx_core::note::NoteRepository;
 
 use crate::state::*;
 use jinx::app::Modal;
@@ -101,7 +101,7 @@ pub(crate) fn handle_notes_list_key(state: &mut RuntimeState, key: crossterm::ev
             }
         }
         KeyCode::Char('n') => {
-            match state.storage.create_note(domain::NewNote {
+            match state.storage.create_note(jinx_core::NewNote {
                 title: String::new(),
                 body: String::new(),
             }) {
@@ -288,7 +288,7 @@ pub(crate) fn save_current_note(state: &mut RuntimeState) {
         } else {
             title
         };
-        match state.storage.update_note(id, domain::NotePatch {
+        match state.storage.update_note(id, jinx_core::NotePatch {
             title: Some(title_val),
             body: Some(body),
         }) {

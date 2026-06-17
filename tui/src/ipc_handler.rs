@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use domain::{
+use jinx_core::{
     DomainError, EventPatch, HexColor, NewEvent, NewGroup, NewNote, NewTask, NotePatch, Priority,
     TaskFilter, TaskPatch, TaskStatus,
 };
-use infrastructure::SqliteStorage;
+use jinx_core::SqliteStorage;
 
 use crate::ipc::{
     Envelope, Kind, MessageType, StorageCompleteTaskRequest, StorageCompleteTaskResponse,
@@ -35,7 +35,7 @@ use crate::ipc::{
 // DTO conversions
 // ---------------------------------------------------------------------------
 
-fn task_to_dto(t: domain::Task) -> StorageTaskDto {
+fn task_to_dto(t: jinx_core::Task) -> StorageTaskDto {
     use crate::ipc::{Priority as IpcPriority, TaskStatus as IpcTaskStatus};
     StorageTaskDto {
         id: t.id,
@@ -56,7 +56,7 @@ fn task_to_dto(t: domain::Task) -> StorageTaskDto {
     }
 }
 
-fn event_to_dto(e: domain::Event) -> StorageEventDto {
+fn event_to_dto(e: jinx_core::Event) -> StorageEventDto {
     StorageEventDto {
         id: e.id,
         title: e.title,
@@ -67,7 +67,7 @@ fn event_to_dto(e: domain::Event) -> StorageEventDto {
     }
 }
 
-fn group_to_dto(g: domain::Group) -> StorageGroupDto {
+fn group_to_dto(g: jinx_core::Group) -> StorageGroupDto {
     StorageGroupDto {
         id: g.id,
         name: g.name,
@@ -75,7 +75,7 @@ fn group_to_dto(g: domain::Group) -> StorageGroupDto {
     }
 }
 
-fn note_to_dto(n: domain::Note) -> StorageNoteDto {
+fn note_to_dto(n: jinx_core::Note) -> StorageNoteDto {
     StorageNoteDto {
         id: n.id,
         title: n.title,
@@ -101,10 +101,10 @@ pub fn handle_storage_request(
     envelope: &Envelope,
     storage: &Arc<SqliteStorage>,
 ) -> Envelope {
-    use domain::task::TaskRepository;
-    use domain::calendar::EventRepository;
-    use domain::group::GroupRepository;
-    use domain::note::NoteRepository;
+    use jinx_core::task::TaskRepository;
+    use jinx_core::calendar::EventRepository;
+    use jinx_core::group::GroupRepository;
+    use jinx_core::note::NoteRepository;
     let response_base = Envelope::new_empty(Kind::Response, envelope.message_type)
         .with_ref(envelope.id);
 

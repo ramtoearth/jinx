@@ -1,4 +1,4 @@
-use domain::DomainError;
+use crate::domain::DomainError;
 use rusqlite::{Connection, params};
 
 static MIGRATIONS: &[&str] = &[

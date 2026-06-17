@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use domain::{
+use crate::domain::{
     DomainError, Group, GroupsSnapshot, HexColor,
     group::{GroupRepository, NewGroup},
 };

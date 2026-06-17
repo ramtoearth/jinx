@@ -21,7 +21,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::Clear,
 };
-use domain::{
+use jinx_core::{
     task::TaskRepository, calendar::EventRepository, group::GroupRepository,
     note::NoteRepository,
 };

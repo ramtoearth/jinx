@@ -1,7 +1,7 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use domain::{
+use crate::domain::{
     DomainError, HexColor, Priority,
     task::{TaskFilter, TaskRepository},
     calendar::EventRepository,
@@ -257,9 +257,9 @@ impl SqliteStorage {
             es
         };
 
-        use domain::group::NewGroup as DomainNewGroup;
-        use domain::task::NewTask as DomainNewTask;
-        use domain::calendar::NewEvent as DomainNewEvent;
+        use crate::domain::group::NewGroup as DomainNewGroup;
+        use crate::domain::task::NewTask as DomainNewTask;
+        use crate::domain::calendar::NewEvent as DomainNewEvent;
 
         for (_, name, color) in &groups {
             let hex = HexColor::new(color.clone())
@@ -271,7 +271,7 @@ impl SqliteStorage {
         }
 
         for (_, title, priority_str, _status, _created_at, deadline, group_id) in &tasks_raw {
-            let priority: domain::Priority = priority_str.parse().map_err(DomainError::ValidationFailed)?;
+            let priority: crate::domain::Priority = priority_str.parse().map_err(DomainError::ValidationFailed)?;
             TaskRepository::create_task(self, DomainNewTask {
                 title: title.clone(),
                 priority: Some(priority),

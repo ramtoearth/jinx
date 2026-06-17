@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use domain::DomainError;
+use crate::domain::DomainError;
 
 pub trait ExportBackend: Send + Sync {
     fn export_markdown(&self, output_path: &Path) -> Result<PathBuf, DomainError>;

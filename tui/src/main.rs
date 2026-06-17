@@ -25,11 +25,11 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs},
     Terminal,
 };
-use domain::{
+use jinx_core::{
     TaskFilter,
     task::TaskRepository, calendar::EventRepository,
 };
-use infrastructure::SqliteStorage;
+use jinx_core::SqliteStorage;
 
 use jinx::app::{AppEvent, AppState, Panel, MIN_COLS, MIN_ROWS};
 use jinx::calendario::{entry_count, flat_entries};
@@ -53,7 +53,7 @@ use panels::*;
 
 fn main() -> io::Result<()> {
     // -- Storage -----------------------------------------------------------
-    let db_path = match infrastructure::resolve_db_path() {
+    let db_path = match jinx_core::resolve_db_path() {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Cannot resolve database path: {e}");
@@ -461,7 +461,7 @@ mod tests {
         let storage = Arc::new(SqliteStorage::in_memory().expect("in-memory"));
         let mut app = AppState::new(120, 40);
 
-        let err = domain::DomainError::NotFound("Task 99 not found".to_string());
+        let err = jinx_core::DomainError::NotFound("Task 99 not found".to_string());
         app = jinx::app::reduce(
             app,
             AppEvent::StorageError(err.clone()),

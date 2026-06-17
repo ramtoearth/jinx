@@ -3,7 +3,7 @@
 //! The pure `calendar_layout` function is property-testable (Property 10).
 
 use std::collections::HashMap;
-use domain::{Event, Task};
+use jinx_core::{Event, Task};
 
 /// Prefixes used to distinguish Tasks from Events in the Calendar view.
 pub const TASK_PREFIX: &str = "▸";
@@ -121,7 +121,7 @@ pub fn entry_count(flat: &[FlatCalEntry]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::{Priority, TaskStatus};
+    use jinx_core::{Priority, TaskStatus};
 
     fn make_task(id: i64, title: &str, deadline: Option<&str>) -> Task {
         Task {

@@ -5,7 +5,7 @@
 //! property-based tests (Properties 18–21).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use domain::DomainError;
+use jinx_core::DomainError;
 
 // ---------------------------------------------------------------------------
 // Panel identity

@@ -8,7 +8,7 @@ pub mod export;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use domain::DomainError;
+use crate::domain::DomainError;
 use rusqlite::Connection;
 
 pub struct SqliteStorage {

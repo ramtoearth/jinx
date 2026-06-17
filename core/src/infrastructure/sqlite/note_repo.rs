@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use domain::{
+use crate::domain::{
     DomainError, Note,
     note::{NewNote, NoteRepository, NotePatch},
 };

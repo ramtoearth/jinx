@@ -5,10 +5,10 @@ use ratatui::{
     text::{Line, Span},
     widgets::{List, ListItem},
 };
-use domain::{TaskFilter, TaskPatch, TaskStatus};
-use domain::task::TaskRepository;
-use domain::calendar::EventRepository;
-use domain::group::GroupRepository;
+use jinx_core::{TaskFilter, TaskPatch, TaskStatus};
+use jinx_core::task::TaskRepository;
+use jinx_core::calendar::EventRepository;
+use jinx_core::group::GroupRepository;
 
 use crate::modals::{open_new_event_modal, open_edit_event_modal, open_edit_task_modal, today_str, week_bounds, month_bounds};
 use crate::state::*;

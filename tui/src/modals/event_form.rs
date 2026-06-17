@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use domain::{
+use jinx_core::{
     EventPatch, NewEvent,
     calendar::EventRepository,
 };

@@ -36,13 +36,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "application"
-version = "0.1.0"
-dependencies = [
- "domain",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -218,15 +211,6 @@ dependencies = [
  "option-ext",
  "redox_users",
  "windows-sys 0.48.0",
-]
-
-[[package]]
-name = "domain"
-version = "0.1.0"
-dependencies = [
- "regex-lite",
- "serde",
- "thiserror",
 ]
 
 [[package]]
@@ -455,16 +439,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "infrastructure"
-version = "0.1.0"
-dependencies = [
- "directories",
- "domain",
- "proptest",
- "rusqlite",
-]
-
-[[package]]
 name = "instability"
 version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -499,8 +473,7 @@ dependencies = [
  "chrono",
  "crossterm",
  "directories",
- "domain",
- "infrastructure",
+ "jinx-core",
  "libc",
  "proptest",
  "pulldown-cmark",
@@ -510,6 +483,18 @@ dependencies = [
  "thiserror",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "jinx-core"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "proptest",
+ "regex-lite",
+ "rusqlite",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

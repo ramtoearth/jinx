@@ -5,9 +5,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{List, ListItem},
 };
-use domain::{Priority, TaskPatch, TaskStatus};
-use domain::task::TaskRepository;
-use domain::group::GroupRepository;
+use jinx_core::{Priority, TaskPatch, TaskStatus};
+use jinx_core::task::TaskRepository;
+use jinx_core::group::GroupRepository;
 
 use crate::modals::{open_new_task_modal, open_edit_task_modal, open_new_group_modal, open_edit_group_modal, open_filter_modal};
 use crate::state::*;
@@ -151,7 +151,7 @@ pub(crate) fn handle_tareas_search_key(state: &mut RuntimeState, key: crossterm:
     }
 }
 
-pub(crate) fn get_search_filtered_tasks(state: &RuntimeState) -> Vec<domain::Task> {
+pub(crate) fn get_search_filtered_tasks(state: &RuntimeState) -> Vec<jinx_core::Task> {
     let mut tasks = get_filtered_tasks(state);
     if !state.tareas_search_query.is_empty() {
         let query = state.tareas_search_query.to_lowercase();
@@ -194,7 +194,7 @@ pub(crate) fn handle_tareas_groups_key(state: &mut RuntimeState, key: crossterm:
     }
 }
 
-pub(crate) fn get_filtered_tasks(state: &RuntimeState) -> Vec<domain::Task> {
+pub(crate) fn get_filtered_tasks(state: &RuntimeState) -> Vec<jinx_core::Task> {
     let mut tasks = state
         .storage
         .list_tasks(state.tareas_filter.to_storage_filter())

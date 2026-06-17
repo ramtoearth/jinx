@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use domain::note::NoteRepository;
+use jinx_core::note::NoteRepository;
 
 use crate::state::*;
 use jinx::config as app_config;

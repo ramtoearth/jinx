@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use domain::{Priority, TaskStatus};
+use jinx_core::{Priority, TaskStatus};
 
 use crate::state::*;
 

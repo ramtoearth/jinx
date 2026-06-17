@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["domain", "application", "infrastructure", "tui"]
+members = ["core", "tui"]
 
 [workspace.package]
 edition = "2021"

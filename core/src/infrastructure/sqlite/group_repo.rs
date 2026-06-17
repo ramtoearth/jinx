@@ -1,4 +1,4 @@
-use domain::{
+use crate::domain::{
     DomainError, Group, GroupInfo, GroupsSnapshot, HexColor,
     group::{GroupRepository, NewGroup},
 };
