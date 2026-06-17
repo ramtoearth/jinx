@@ -327,8 +327,8 @@ impl DirBrowserState {
                     files.push(DirBrowserEntry { name, is_dir: false });
                 }
             }
-            dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-            files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            dirs.sort_by_key(|a| a.name.to_lowercase());
+            files.sort_by_key(|a| a.name.to_lowercase());
             self.entries.extend(dirs);
             self.entries.extend(files);
         }
@@ -4222,16 +4222,13 @@ fn handle_notes_preview_key(state: &mut RuntimeState, key: crossterm::event::Key
 fn handle_export_note_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     match key.code {
         KeyCode::Esc => { state.app.modal = None; }
-        KeyCode::Up => {
-            if state.dir_browser.cursor > 0 {
-                state.dir_browser.cursor -= 1;
-            }
+        KeyCode::Up if state.dir_browser.cursor > 0 => {
+            state.dir_browser.cursor -= 1;
         }
-        KeyCode::Down => {
-            if state.dir_browser.cursor + 1 < state.dir_browser.entries.len() {
+        KeyCode::Down
+            if state.dir_browser.cursor + 1 < state.dir_browser.entries.len() => {
                 state.dir_browser.cursor += 1;
             }
-        }
         KeyCode::Right => {
             if let Some(entry) = state.dir_browser.entries.get(state.dir_browser.cursor) {
                 if entry.is_dir {
