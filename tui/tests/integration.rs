@@ -3,7 +3,11 @@
 
 use std::sync::Arc;
 
-use storage::{NewEvent, NewGroup, NewTask, SqliteStorage, Storage, TaskFilter};
+use jinx_core::{HexColor, NewEvent, NewGroup, NewTask, TaskFilter};
+use jinx_core::task::TaskRepository;
+use jinx_core::calendar::EventRepository;
+use jinx_core::group::GroupRepository;
+use jinx_core::SqliteStorage;
 use jinx::app::{AppEvent, AppState, Panel};
 use jinx::calendario::calendar_layout;
 use jinx::color::{resolve_style, ColorMode};
@@ -20,8 +24,7 @@ use jinx::proximos::proximos;
 
 #[test]
 fn ipc_create_task_appears_in_storage() {
-    let storage: Arc<dyn Storage + Send + Sync> =
-        Arc::new(SqliteStorage::in_memory().expect("in-memory"));
+    let storage = Arc::new(SqliteStorage::in_memory().expect("in-memory"));
 
     // Simulate agent creating a task via IPC
     let req = StorageCreateTaskRequest {
@@ -80,13 +83,12 @@ fn timeout_status_appears_in_status_bar() {
 
 #[test]
 fn ipc_list_tasks_with_group_filter() {
-    let storage: Arc<dyn Storage + Send + Sync> =
-        Arc::new(SqliteStorage::in_memory().expect("in-memory"));
+    let storage = Arc::new(SqliteStorage::in_memory().expect("in-memory"));
 
     let group = storage
         .create_group(NewGroup {
             name: "trabajo".to_string(),
-            color: storage::HexColor::new("#3344ff".to_string()).unwrap(),
+            color: HexColor::new("#3344ff".to_string()).unwrap(),
         })
         .expect("create group");
 
@@ -134,8 +136,7 @@ fn ipc_list_tasks_with_group_filter() {
 
 #[test]
 fn storage_change_reflected_in_proximos() {
-    let storage: Arc<dyn Storage + Send + Sync> =
-        Arc::new(SqliteStorage::in_memory().expect("in-memory"));
+    let storage = Arc::new(SqliteStorage::in_memory().expect("in-memory"));
 
     // Before: no tasks
     let tasks = storage.list_tasks(TaskFilter::default()).unwrap_or_default();
@@ -182,7 +183,7 @@ fn storage_change_reflected_in_proximos() {
 #[test]
 fn monochrome_mode_adds_group_prefix() {
     let group_name = "trabajo";
-    let hex = storage::HexColor::new("#ff6600".to_string()).unwrap();
+    let hex = HexColor::new("#ff6600".to_string()).unwrap();
     let styled = resolve_style(Some(&hex), Some(group_name), ColorMode::Monochrome);
     assert!(
         styled.prefix.as_deref().unwrap_or("").contains(group_name),
@@ -198,8 +199,7 @@ fn monochrome_mode_adds_group_prefix() {
 
 #[test]
 fn calendar_shows_tasks_and_events_on_same_date() {
-    let storage: Arc<dyn Storage + Send + Sync> =
-        Arc::new(SqliteStorage::in_memory().expect("in-memory"));
+    let storage = Arc::new(SqliteStorage::in_memory().expect("in-memory"));
 
     storage
         .create_task(NewTask {

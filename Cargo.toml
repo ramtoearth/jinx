@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["storage", "tui"]
+members = ["core", "tui"]
 
 [workspace.package]
 edition = "2021"
@@ -21,3 +21,4 @@ proptest = "1"
 toml = "0.8"
 pulldown-cmark = "0.12"
 libc = "0.2"
+regex-lite = "0.1"

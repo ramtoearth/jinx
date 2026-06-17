@@ -5,7 +5,7 @@
 //! property-based tests (Properties 18–21).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use storage::StorageError;
+use jinx_core::DomainError;
 
 // ---------------------------------------------------------------------------
 // Panel identity
@@ -153,7 +153,7 @@ pub enum AppEvent {
     /// The Agent process died unexpectedly.
     AgentDied { reason: String },
     /// A storage operation failed.
-    StorageError(StorageError),
+    StorageError(DomainError),
     /// A status bar message to show.
     StatusMessage(String),
     /// Close the active modal without saving.

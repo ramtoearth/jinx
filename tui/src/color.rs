@@ -5,7 +5,7 @@
 //! pure so they can be property-tested (Properties 22, 23).
 
 use ratatui::style::{Color, Modifier, Style};
-use storage::HexColor;
+use jinx_core::HexColor;
 
 // ---------------------------------------------------------------------------
 // Color mode
@@ -228,7 +228,7 @@ pub const XTERM256_PALETTE: [(u8, u8, u8); 256] = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::HexColor;
+    use jinx_core::HexColor;
 
     #[test]
     fn truecolor_uses_exact_rgb() {
