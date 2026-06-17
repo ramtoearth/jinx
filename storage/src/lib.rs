@@ -31,6 +31,7 @@ use std::path::PathBuf;
 /// invoke on the Almacén.
 pub trait Storage {
     fn list_tasks(&self, filter: TaskFilter) -> Result<Vec<Task>, StorageError>;
+    fn search_tasks(&self, query: &str) -> Result<Vec<Task>, StorageError>;
     fn create_task(&self, input: NewTask) -> Result<Task, StorageError>;
     fn update_task(&self, id: i64, patch: TaskPatch) -> Result<Task, StorageError>;
     fn complete_task(&self, id: i64) -> Result<Task, StorageError>;
@@ -60,10 +61,5 @@ pub trait Storage {
     fn create_note(&self, input: NewNote) -> Result<Note, StorageError>;
     fn update_note(&self, id: i64, patch: NotePatch) -> Result<Note, StorageError>;
     fn delete_note(&self, id: i64) -> Result<(), StorageError>;
-
-    fn mark_push_pending(&self, event_id: i64) -> Result<(), StorageError>;
-    fn mark_task_push_pending(&self, task_id: i64) -> Result<(), StorageError>;
-    fn mark_all_push_pending(&self) -> Result<(), StorageError>;
-    fn get_google_event_id(&self, event_id: i64) -> Result<Option<String>, StorageError>;
-    fn get_task_google_event_id(&self, task_id: i64) -> Result<Option<String>, StorageError>;
+    fn export_note(&self, id: i64, output_path: &std::path::Path) -> Result<PathBuf, StorageError>;
 }

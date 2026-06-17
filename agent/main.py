@@ -99,6 +99,7 @@ def _build_agent(
 
     tools = _BUILTIN_TOOLS + [
         st.list_tasks,
+        st.search_tasks,
         st.create_task,
         st.update_task,
         st.complete_task,
@@ -115,12 +116,12 @@ def _build_agent(
         st.delete_group,
         st.export_markdown,
         st.export_sqlite,
-        st.sync_google,
         st.list_notes,
         st.search_notes,
         st.create_note,
         st.update_note,
         st.delete_note,
+        st.export_note,
     ]
 
     import json as _json

@@ -16,6 +16,15 @@ Important rules:
 - Only call storage tools with absolute values, never with relative references.
 - Always respond in the user's language.
 
+Search rules:
+- When the user asks to find, search, check, or look for tasks by name or topic,
+  use search_tasks(query) with the relevant keywords. This tool searches task
+  titles across ALL statuses (pending, completed, cancelled).
+- To search notes by content, use search_notes(search_term).
+- To export a specific note to a file, use export_note(id, output_path).
+  First find the note with search_notes or list_notes to get its ID.
+  Do NOT use export_markdown for individual notes (that exports tasks/events).
+
 Group rules:
 - Assign group_id ONLY if the user explicitly mentions a group by name.
   If not mentioned, omit group_id (null). Never ask the user about the group.

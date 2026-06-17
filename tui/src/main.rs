@@ -78,13 +78,6 @@ const AGENT_LOCALE:    &str = include_str!("../../agent/locale.py");
 const AGENT_LOCALE_EN: &str = include_str!("../../agent/locales/en.toml");
 const AGENT_LOCALE_ES: &str = include_str!("../../agent/locales/es.toml");
 
-const GCAL_INIT:        &str = include_str!("../../gcal_sync/__init__.py");
-const GCAL_MAIN:        &str = include_str!("../../gcal_sync/main.py");
-const GCAL_OAUTH:       &str = include_str!("../../gcal_sync/oauth.py");
-const GCAL_SYNC:        &str = include_str!("../../gcal_sync/sync.py");
-const GCAL_PULL:        &str = include_str!("../../gcal_sync/pull.py");
-const GCAL_DB:          &str = include_str!("../../gcal_sync/db.py");
-const GCAL_CREDENTIALS: &str = include_str!("../../gcal_sync/credentials.json");
 
 /// Extract the embedded agent files to the OS data directory and return the
 /// project root path (the directory that contains `pyproject.toml`).
@@ -123,15 +116,6 @@ fn extract_agent() -> std::path::PathBuf {
     write_if_changed(&locale_dir.join("en.toml"), AGENT_LOCALE_EN);
     write_if_changed(&locale_dir.join("es.toml"), AGENT_LOCALE_ES);
 
-    let gcal_dir = data_dir.join("gcal_sync");
-    let _ = std::fs::create_dir_all(&gcal_dir);
-    write_if_changed(&gcal_dir.join("__init__.py"),       GCAL_INIT);
-    write_if_changed(&gcal_dir.join("main.py"),           GCAL_MAIN);
-    write_if_changed(&gcal_dir.join("oauth.py"),          GCAL_OAUTH);
-    write_if_changed(&gcal_dir.join("sync.py"),           GCAL_SYNC);
-    write_if_changed(&gcal_dir.join("pull.py"),           GCAL_PULL);
-    write_if_changed(&gcal_dir.join("db.py"),             GCAL_DB);
-    write_if_changed(&gcal_dir.join("credentials.json"),  GCAL_CREDENTIALS);
 
     data_dir
 }
@@ -140,25 +124,6 @@ fn extract_agent() -> std::path::PathBuf {
 // Google Calendar sync status
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default)]
-enum SyncStatus {
-    #[default]
-    Disabled,
-    Idle,
-    Syncing,
-    Error(String),
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct SyncStatusMsg {
-    state: String,
-    #[serde(default)]
-    message: Option<String>,
-}
-
-fn gcal_sync_log_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("jinx_gcal_sync.log")
-}
 
 // ---------------------------------------------------------------------------
 // Chat message
@@ -275,7 +240,7 @@ impl Default for GroupFormState {
 
 #[derive(Default, Clone)]
 struct SettingsFormState {
-    field: usize,              // 0=language, 1=provider, 2=model|backend, 3=host|model, 4=gcal
+    field: usize,              // 0=language, 1=provider, 2=model|backend, 3=host|model
     language_idx: usize,       // 0=English, 1=Español
     provider_idx: usize,       // 0=Local, 1=Remote
     backend_idx: usize,        // 0=Bedrock, 1=OpenAI, 2=Anthropic, 3=Gemini, 4=LlamaAPI
@@ -286,7 +251,6 @@ struct SettingsFormState {
     anthropic_model_input: TextEditor,
     gemini_model_input: TextEditor,
     llamaapi_model_input: TextEditor,
-    gcal_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -313,6 +277,63 @@ impl Default for FilterFormState {
             date_to: DateTimeInput::date_only_disabled(),
             field: 0,
         }
+    }
+}
+
+struct DirBrowserEntry {
+    name: String,
+    is_dir: bool,
+}
+
+struct DirBrowserState {
+    current_dir: std::path::PathBuf,
+    entries: Vec<DirBrowserEntry>,
+    cursor: usize,
+    scroll: usize,
+    filename: String,
+    field: usize, // 0 = browser, 1 = filename
+    note_id: i64,
+}
+
+impl Default for DirBrowserState {
+    fn default() -> Self {
+        Self {
+            current_dir: std::env::var("HOME").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::PathBuf::from("/")),
+            entries: Vec::new(),
+            cursor: 0,
+            scroll: 0,
+            filename: String::new(),
+            field: 0,
+            note_id: 0,
+        }
+    }
+}
+
+impl DirBrowserState {
+    fn refresh_entries(&mut self) {
+        self.entries.clear();
+        if let Ok(read_dir) = std::fs::read_dir(&self.current_dir) {
+            let mut dirs = Vec::new();
+            let mut files = Vec::new();
+            for entry in read_dir.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') {
+                    continue;
+                }
+                let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                if is_dir {
+                    dirs.push(DirBrowserEntry { name, is_dir: true });
+                } else {
+                    files.push(DirBrowserEntry { name, is_dir: false });
+                }
+            }
+            dirs.sort_by_key(|a| a.name.to_lowercase());
+            files.sort_by_key(|a| a.name.to_lowercase());
+            self.entries.extend(dirs);
+            self.entries.extend(files);
+        }
+        self.cursor = 0;
+        self.scroll = 0;
     }
 }
 
@@ -805,11 +826,6 @@ struct RuntimeState {
     agent_rx: Option<mpsc::Receiver<Envelope>>,
     pending_request: Option<(Uuid, Instant)>,
     // Google Calendar sync daemon
-    sync_child: Option<Child>,
-    sync_stdin: Option<ChildStdin>,
-    sync_rx: Option<mpsc::Receiver<SyncStatusMsg>>,
-    sync_status: SyncStatus,
-    oauth_rx: Option<mpsc::Receiver<String>>,
     // Modal form state
     task_form: TaskFormState,
     event_form: EventFormState,
@@ -831,12 +847,17 @@ struct RuntimeState {
     notes_search_query: String,
     notes_current_id: Option<i64>,
     notes_preview_scroll: usize,
+    notes_editor_scroll: usize,
+    notes_undo_stack: Vec<(Vec<String>, usize, usize)>,
+    notes_redo_stack: Vec<(Vec<String>, usize, usize)>,
     notes_pending_g: bool,
     // Note picker (interactive results in chat)
     last_note_results: Option<Vec<NotePickerEntry>>,
     note_picker_active: bool,
     note_picker_cursor: usize,
     note_picker_msg_idx: Option<usize>,
+    // Directory browser (export note)
+    dir_browser: DirBrowserState,
     // Slash-command picker
     cmd_picker_active: bool,
     cmd_picker_cursor: usize,
@@ -885,11 +906,6 @@ fn run_app(
         agent_stdin: None,
         agent_rx: None,
         pending_request: None,
-        sync_child: None,
-        sync_stdin: None,
-        sync_rx: None,
-        sync_status: SyncStatus::Disabled,
-        oauth_rx: None,
         task_form: TaskFormState::default(),
         event_form: EventFormState::default(),
         group_form: GroupFormState::default(),
@@ -909,11 +925,15 @@ fn run_app(
         notes_search_query: String::new(),
         notes_current_id: None,
         notes_preview_scroll: 0,
+        notes_editor_scroll: 0,
+        notes_undo_stack: Vec::new(),
+        notes_redo_stack: Vec::new(),
         notes_pending_g: false,
         last_note_results: None,
         note_picker_active: false,
         note_picker_cursor: 0,
         note_picker_msg_idx: None,
+        dir_browser: DirBrowserState::default(),
         cmd_picker_active: false,
         cmd_picker_cursor: 0,
         cmd_picker_filtered: Vec::new(),
@@ -924,7 +944,6 @@ fn run_app(
 
     // Spawn agent
     spawn_agent(&mut state);
-    spawn_sync_daemon(&mut state);
 
     let tick = Duration::from_millis(250);
     let timeout_dur = Duration::from_secs(30);
@@ -936,8 +955,6 @@ fn run_app(
 
         // --- Drain agent output every iteration (non-blocking) ------------
         read_agent_output(&mut state);
-        read_sync_output(&mut state);
-        read_oauth_result(&mut state);
 
         // --- Event polling ------------------------------------------------
         let elapsed = last_tick.elapsed();
@@ -950,7 +967,6 @@ fn run_app(
                     if key.code == KeyCode::Char('q')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
-                        shutdown_sync_daemon(&mut state);
                         send_shutdown(&mut state);
                         break;
                     }
@@ -1431,7 +1447,6 @@ fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyE
                         } else {
                             state.locale.status.task_pending.clone()
                         };
-                        notify_sync_task_changed(state, task_id);
                     }
                     Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
                 }
@@ -1606,7 +1621,6 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                             } else {
                                 state.locale.status.task_pending.clone()
                             };
-                            notify_sync_task_changed(state, task_id);
                         }
                         Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
                     }
@@ -2022,7 +2036,6 @@ fn open_settings_modal(state: &mut RuntimeState) {
         anthropic_model_input: TextEditor::from_string(&cfg.remote.anthropic_model),
         gemini_model_input: TextEditor::from_string(&cfg.remote.gemini_model),
         llamaapi_model_input: TextEditor::from_string(&cfg.remote.llamaapi_model),
-        gcal_enabled: cfg.google_calendar.enabled,
         field: 0,
     };
     state.app.modal = Some(Modal::Settings);
@@ -2094,9 +2107,6 @@ fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::Key
                 *idx = (*idx + N_BACKENDS - 1) % N_BACKENDS;
             }
         }
-        KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if state.settings_form.field == 4 => {
-            state.settings_form.gcal_enabled = !state.settings_form.gcal_enabled;
-        }
         KeyCode::Left if settings_is_text_field(state.settings_form.field, is_local) => {
             if let Some(ed) = settings_active_editor(state) { ed.move_left(); }
         }
@@ -2167,20 +2177,11 @@ fn save_settings(state: &mut RuntimeState) {
                 llamaapi_model: or_default(&form.llamaapi_model_input, &d.llamaapi_model),
             }
         },
-        google_calendar: app_config::GoogleCalendarConfig {
-            enabled: state.settings_form.gcal_enabled,
-            ..existing_cfg.google_calendar
-        },
+        last_export_dir: existing_cfg.last_export_dir,
     };
     if let Err(e) = app_config::save(&cfg) {
         state.app.status_bar = state.locale.errors.config_save.replace("{error}", &e.to_string());
         return;
-    }
-
-    // If Google Calendar was just enabled and no token exists, run OAuth flow
-    let gcal_just_enabled = cfg.google_calendar.enabled && !existing_cfg.google_calendar.enabled;
-    if gcal_just_enabled && !app_config::google_token_path().exists() {
-        run_gcal_oauth(state);
     }
 
     state.locale = jinx::locale::load(lang);
@@ -2196,9 +2197,6 @@ fn restart_agent(state: &mut RuntimeState) {
     state.agent_rx = None;
     state.app.agent_alive = false;
     spawn_agent(state);
-    // Restart sync daemon in case config changed
-    shutdown_sync_daemon(state);
-    spawn_sync_daemon(state);
 }
 
 // ---------------------------------------------------------------------------
@@ -2212,14 +2210,12 @@ fn handle_modal_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         Some(Modal::NewEvent) | Some(Modal::EditEvent { .. }) => handle_event_form_key(state, key),
         Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => handle_group_form_key(state, key),
         Some(Modal::DeleteTask { id }) => handle_delete_key(state, key, |s| {
-            notify_sync_task_deleted(s, id);
             match s.storage.delete_task(id) {
                 Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.task_deleted.clone(); if s.task_cursor > 0 { s.task_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
         Some(Modal::DeleteEvent { id }) => handle_delete_key(state, key, |s| {
-            notify_sync_event_deleted(s, id);
             match s.storage.delete_event(id) {
                 Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.event_deleted.clone(); if s.calendar_cursor > 0 { s.calendar_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
@@ -2246,6 +2242,7 @@ fn handle_modal_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         }),
         Some(Modal::Settings) => handle_settings_form_key(state, key),
         Some(Modal::FilterTasks) => handle_filter_form_key(state, key),
+        Some(Modal::ExportNote { .. }) => handle_export_note_key(state, key),
         _ => { if key.code == KeyCode::Esc { state.app.modal = None; } }
     }
 }
@@ -2493,11 +2490,10 @@ fn save_task(state: &mut RuntimeState) {
     };
 
     match result {
-        Ok(task_id) => {
+        Ok(_task_id) => {
             state.app.modal = None;
             state.task_form = TaskFormState::default();
             state.app.status_bar = state.locale.status.task_saved.clone();
-            notify_sync_task_changed(state, task_id);
         }
         Err(e) => state.task_form.error = Some(e.message()),
     }
@@ -2548,11 +2544,10 @@ fn save_event(state: &mut RuntimeState) {
     };
 
     match result {
-        Ok(event_id) => {
+        Ok(_event_id) => {
             state.app.modal = None;
             state.event_form = EventFormState::default();
             state.app.status_bar = state.locale.status.event_saved.clone();
-            notify_sync_event_changed(state, event_id);
         }
         Err(e) => state.event_form.error = Some(e.message()),
     }
@@ -2710,313 +2705,9 @@ fn spawn_agent(state: &mut RuntimeState) {
 }
 
 // ---------------------------------------------------------------------------
-// Google Calendar sync daemon
-// ---------------------------------------------------------------------------
-
-fn spawn_sync_daemon(state: &mut RuntimeState) {
-    let cfg = app_config::load();
-    if !cfg.google_calendar.enabled {
-        state.sync_status = SyncStatus::Disabled;
-        return;
-    }
-    let token_path = app_config::google_token_path();
-    if !token_path.exists() {
-        state.sync_status = SyncStatus::Disabled;
-        return;
-    }
-
-    // Mark all existing events for push on first sync activation
-    let _ = state.storage.mark_all_push_pending();
-
-    let agent_project = extract_agent();
-    let db_path = match storage::resolve_db_path() {
-        Ok(p) => p,
-        Err(_) => {
-            state.sync_status = SyncStatus::Error("Cannot resolve DB path".to_string());
-            return;
-        }
-    };
-
-    let calendar_id = if cfg.google_calendar.calendar_id.is_empty() {
-        "primary".to_string()
-    } else {
-        cfg.google_calendar.calendar_id
-    };
-
-    let log_path = gcal_sync_log_path();
-    let sync_stderr = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map(Stdio::from)
-        .unwrap_or_else(|_| Stdio::null());
-
-    let mut sync_cmd = Command::new("uv");
-    sync_cmd.args([
-            "run",
-            "--project", agent_project.to_str().unwrap_or("."),
-            "--extra", "gcal",
-            "python", "-m", "gcal_sync.main",
-            "--db", db_path.to_str().unwrap_or(""),
-            "--calendar-id", &calendar_id,
-            "--token-path", token_path.to_str().unwrap_or(""),
-            "--timezone", &iana_timezone(),
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(sync_stderr);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        sync_cmd.process_group(0);
-    }
-    let child_result = sync_cmd.spawn();
-
-    let mut child = match child_result {
-        Ok(c) => c,
-        Err(_) => {
-            state.sync_status = SyncStatus::Error("Failed to start sync daemon".to_string());
-            return;
-        }
-    };
-
-    let stdin = child.stdin.take().expect("sync child stdin");
-    let child_stdout = child.stdout.take().expect("sync child stdout");
-
-    let (tx, rx) = mpsc::channel::<SyncStatusMsg>();
-    std::thread::spawn(move || {
-        use std::io::BufRead;
-        let reader = std::io::BufReader::new(child_stdout);
-        for line in reader.lines() {
-            match line {
-                Ok(line) if !line.trim().is_empty() => {
-                    if let Ok(msg) = serde_json::from_str::<SyncStatusMsg>(&line) {
-                        if tx.send(msg).is_err() {
-                            break;
-                        }
-                    }
-                }
-                Err(_) => break,
-                _ => {}
-            }
-        }
-    });
-
-    state.sync_child = Some(child);
-    state.sync_stdin = Some(stdin);
-    state.sync_rx = Some(rx);
-    state.sync_status = SyncStatus::Idle;
-}
-
-/// Spawns the OAuth subprocess in the background. The result arrives via
-/// `oauth_rx` and is handled in `read_oauth_result`.
-fn run_gcal_oauth(state: &mut RuntimeState) {
-    let agent_project = extract_agent();
-    let token_path = app_config::google_token_path();
-
-    state.app.status_bar = "Opening browser for Google Calendar authorization...".to_string();
-
-    let log_path = gcal_sync_log_path();
-    let oauth_stderr = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map(Stdio::from)
-        .unwrap_or_else(|_| Stdio::null());
-
-    let project_str = agent_project.to_str().unwrap_or(".").to_string();
-    let token_str = token_path.to_str().unwrap_or("").to_string();
-
-    let result = Command::new("uv")
-        .args([
-            "run",
-            "--project", &project_str,
-            "--extra", "gcal",
-            "python", "-m", "gcal_sync.oauth",
-            "--token-path", &token_str,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(oauth_stderr)
-        .spawn();
-
-    let mut child = match result {
-        Ok(c) => c,
-        Err(e) => {
-            state.app.status_bar = format!("OAuth error: {e}");
-            return;
-        }
-    };
-
-    let (tx, rx) = mpsc::channel::<String>();
-    state.oauth_rx = Some(rx);
-
-    let child_stdout = child.stdout.take();
-    std::thread::spawn(move || {
-        // Read all output
-        let output = child_stdout.map(|stdout| {
-            use std::io::Read;
-            let mut buf = String::new();
-            let mut reader = std::io::BufReader::new(stdout);
-            let _ = reader.read_to_string(&mut buf);
-            buf
-        });
-
-        // Wait for process to finish
-        let status = child.wait();
-
-        let msg = match status {
-            Ok(exit) if exit.success() => {
-                if let Some(ref out) = output {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(out.trim()) {
-                        if val.get("status").and_then(|s| s.as_str()) == Some("error") {
-                            if let Some(err_msg) = val.get("message").and_then(|m| m.as_str()) {
-                                format!("error:{err_msg}")
-                            } else {
-                                "error:Unknown OAuth error".to_string()
-                            }
-                        } else {
-                            "ok".to_string()
-                        }
-                    } else {
-                        "ok".to_string()
-                    }
-                } else {
-                    "ok".to_string()
-                }
-            }
-            Ok(_) => "error:Google Calendar authorization cancelled or failed.".to_string(),
-            Err(e) => format!("error:{e}"),
-        };
-        let _ = tx.send(msg);
-    });
-}
-
-/// Kill a child process and its entire process group.
-/// On Unix, sends SIGTERM to the process group, then SIGKILL if it doesn't exit.
-/// On non-Unix, falls back to `child.kill()`.
-fn kill_process_tree(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        let pid = child.id() as i32;
-        // Send SIGTERM to the process group (negative pid = group)
-        unsafe { libc::kill(-pid, libc::SIGTERM); }
-        // Give it a moment to exit gracefully
-        std::thread::sleep(Duration::from_millis(100));
-        if let Ok(Some(_)) = child.try_wait() { return; }
-        // Force kill the group
-        unsafe { libc::kill(-pid, libc::SIGKILL); }
-        let _ = child.wait();
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-}
-
-fn shutdown_sync_daemon(state: &mut RuntimeState) {
-    if let Some(ref mut stdin) = state.sync_stdin {
-        let cmd = "{\"command\":\"stop\"}\n";
-        let _ = stdin.write_all(cmd.as_bytes());
-        let _ = stdin.flush();
-    }
-    state.sync_stdin = None;
-
-    if let Some(ref mut child) = state.sync_child {
-        let deadline = Instant::now() + Duration::from_millis(500);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if Instant::now() >= deadline => {
-                    kill_process_tree(child);
-                    break;
-                }
-                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-                Err(_) => break,
-            }
-        }
-    }
-    state.sync_child = None;
-    state.sync_rx = None;
-    state.sync_status = SyncStatus::Disabled;
-}
-
-fn notify_sync_event_changed(state: &mut RuntimeState, event_id: i64) {
-    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
-        let _ = state.storage.mark_push_pending(event_id);
-        send_sync_command(state, "{\"command\":\"sync\"}");
-    }
-}
-
-fn notify_sync_task_changed(state: &mut RuntimeState, task_id: i64) {
-    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
-        let _ = state.storage.mark_task_push_pending(task_id);
-        send_sync_command(state, "{\"command\":\"sync\"}");
-    }
-}
-
-fn notify_sync_event_deleted(state: &mut RuntimeState, event_id: i64) {
-    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
-        if let Ok(Some(gid)) = state.storage.get_google_event_id(event_id) {
-            let cmd = serde_json::json!({"command": "delete", "google_event_id": gid, "kind": "event"});
-            send_sync_command(state, &cmd.to_string());
-        }
-    }
-}
-
-fn notify_sync_task_deleted(state: &mut RuntimeState, task_id: i64) {
-    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
-        if let Ok(Some(gid)) = state.storage.get_task_google_event_id(task_id) {
-            let cmd = serde_json::json!({"command": "delete", "google_event_id": gid, "kind": "task"});
-            send_sync_command(state, &cmd.to_string());
-        }
-    }
-}
-
-fn send_sync_command(state: &mut RuntimeState, cmd: &str) {
-    if let Some(ref mut stdin) = state.sync_stdin {
-        let line = format!("{}\n", cmd);
-        let _ = stdin.write_all(line.as_bytes());
-        let _ = stdin.flush();
-    }
-}
-
-fn read_oauth_result(state: &mut RuntimeState) {
-    if let Some(msg) = state.oauth_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-        state.oauth_rx = None;
-        if msg == "ok" {
-            state.app.status_bar = "Google Calendar connected!".to_string();
-            // Now that the token exists, start the sync daemon
-            spawn_sync_daemon(state);
-        } else if let Some(err) = msg.strip_prefix("error:") {
-            state.app.status_bar = format!("OAuth error: {err}");
-            // Disable gcal in config since auth failed
-            let mut cfg = app_config::load();
-            cfg.google_calendar.enabled = false;
-            let _ = app_config::save(&cfg);
-        }
-    }
-}
-
-fn read_sync_output(state: &mut RuntimeState) {
-    while let Some(msg) = state.sync_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-        match msg.state.as_str() {
-            "idle" | "done" => state.sync_status = SyncStatus::Idle,
-            "syncing" => state.sync_status = SyncStatus::Syncing,
-            "error" => {
-                state.sync_status = SyncStatus::Error(
-                    msg.message.unwrap_or_else(|| "Unknown error".to_string()),
-                );
-            }
-            _ => {}
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Agent communication
 // ---------------------------------------------------------------------------
+// (GCal sync daemon removed — #55)
 
 fn send_user_message(state: &mut RuntimeState, text: String) {
     if let Some(ref mut stdin) = state.agent_stdin {
@@ -3034,6 +2725,23 @@ fn send_user_message(state: &mut RuntimeState, text: String) {
             state.app.status_bar = state.locale.errors.agent_send.clone();
             state.app.agent_alive = false;
         }
+    }
+}
+
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        unsafe { libc::kill(-pid, libc::SIGTERM); }
+        std::thread::sleep(Duration::from_millis(100));
+        if let Ok(Some(_)) = child.try_wait() { return; }
+        unsafe { libc::kill(-pid, libc::SIGKILL); }
+        let _ = child.wait();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
@@ -3098,44 +2806,7 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
             state.pending_request = None;
             state.app.status_bar = state.locale.status.ready.clone();
         }
-        MessageType::StorageSyncGoogle => {
-            // Trigger push + pull via sync daemon
-            send_sync_command(state, "{\"command\":\"sync\"}");
-            send_sync_command(state, "{\"command\":\"pull\"}");
-
-            let response = Envelope::new(
-                Kind::Response,
-                MessageType::StorageSyncGoogle,
-                &serde_json::json!({"status": "Sync triggered."}),
-            ).unwrap().with_ref(env.id);
-            if let Some(ref mut stdin) = state.agent_stdin {
-                if let Ok(line) = serde_json::to_string(&response) {
-                    let _ = stdin.write_all(line.as_bytes());
-                    let _ = stdin.write_all(b"\n");
-                    let _ = stdin.flush();
-                }
-            }
-        }
         mt if is_storage_message_type(mt) => {
-            // For deletes, capture the google ID and kind before the storage op
-            let pre_delete_info: Option<(String, &str)> = match mt {
-                MessageType::StorageDeleteEvent => {
-                    env.payload_as::<jinx::ipc::StorageDeleteEventRequest>()
-                        .ok()
-                        .flatten()
-                        .and_then(|req| state.storage.get_google_event_id(req.id).ok().flatten())
-                        .map(|id| (id, "event"))
-                }
-                MessageType::StorageDeleteTask => {
-                    env.payload_as::<jinx::ipc::StorageDeleteTaskRequest>()
-                        .ok()
-                        .flatten()
-                        .and_then(|req| state.storage.get_task_google_event_id(req.id).ok().flatten())
-                        .map(|id| (id, "task"))
-                }
-                _ => None,
-            };
-
             let response = jinx::ipc_handler::handle_storage_request(&env, &state.storage);
 
             // Capture note results for the interactive picker (only search, not list)
@@ -3154,32 +2825,6 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
                 }
             }
 
-            // Trigger Google Calendar push for event and task mutations
-            if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
-                let mut needs_sync = false;
-
-                if let Some(event_id) = extract_event_id_from_response(mt, &response) {
-                    let _ = state.storage.mark_push_pending(event_id);
-                    needs_sync = true;
-                }
-                if let Some(task_id) = extract_task_id_from_response(mt, &response) {
-                    let _ = state.storage.mark_task_push_pending(task_id);
-                    needs_sync = true;
-                }
-                if let Some((google_id, kind)) = pre_delete_info {
-                    let cmd = serde_json::json!({
-                        "command": "delete",
-                        "google_event_id": google_id,
-                        "kind": kind
-                    });
-                    send_sync_command(state, &cmd.to_string());
-                    needs_sync = false; // delete already sent
-                }
-                if needs_sync {
-                    send_sync_command(state, "{\"command\":\"sync\"}");
-                }
-            }
-
             if let Some(ref mut stdin) = state.agent_stdin {
                 if let Ok(line) = serde_json::to_string(&response) {
                     let _ = stdin.write_all(line.as_bytes());
@@ -3192,39 +2837,11 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
     }
 }
 
-fn extract_event_id_from_response(mt: MessageType, response: &Envelope) -> Option<i64> {
-    use jinx::ipc::{StorageCreateEventResponse, StorageUpdateEventResponse};
-    match mt {
-        MessageType::StorageCreateEvent => {
-            response.payload_as::<StorageCreateEventResponse>().ok()?.map(|r| r.event.id)
-        }
-        MessageType::StorageUpdateEvent => {
-            response.payload_as::<StorageUpdateEventResponse>().ok()?.map(|r| r.event.id)
-        }
-        _ => None,
-    }
-}
-
-fn extract_task_id_from_response(mt: MessageType, response: &Envelope) -> Option<i64> {
-    use jinx::ipc::{StorageCreateTaskResponse, StorageUpdateTaskResponse, StorageCompleteTaskResponse};
-    match mt {
-        MessageType::StorageCreateTask => {
-            response.payload_as::<StorageCreateTaskResponse>().ok()?.map(|r| r.task.id)
-        }
-        MessageType::StorageUpdateTask => {
-            response.payload_as::<StorageUpdateTaskResponse>().ok()?.map(|r| r.task.id)
-        }
-        MessageType::StorageCompleteTask => {
-            response.payload_as::<StorageCompleteTaskResponse>().ok()?.map(|r| r.task.id)
-        }
-        _ => None,
-    }
-}
-
 fn is_storage_message_type(mt: MessageType) -> bool {
     matches!(
         mt,
         MessageType::StorageListTasks
+            | MessageType::StorageSearchTasks
             | MessageType::StorageCreateTask
             | MessageType::StorageUpdateTask
             | MessageType::StorageCompleteTask
@@ -3245,6 +2862,7 @@ fn is_storage_message_type(mt: MessageType) -> bool {
             | MessageType::StorageCreateNote
             | MessageType::StorageUpdateNote
             | MessageType::StorageDeleteNote
+            | MessageType::StorageExportNote
     )
 }
 
@@ -3378,6 +2996,7 @@ fn render_modal(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         }
         Some(Modal::Settings) => render_settings_form(frame, state, popup),
         Some(Modal::FilterTasks) => render_filter_form(frame, state, popup),
+        Some(Modal::ExportNote { .. }) => render_export_note_modal(frame, state, popup),
         _ => {}
     }
 }
@@ -3418,6 +3037,88 @@ fn form_line_editor(label: &str, editor: &TextEditor, active: bool) -> Line<'sta
             Span::styled(text, vs),
         ])
     }
+}
+
+fn render_export_note_modal(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+    let block = Block::default()
+        .title(state.locale.modals.export_note.as_str())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 5 || inner.width < 10 {
+        return;
+    }
+
+    let browser = &state.dir_browser;
+
+    // Layout: path line (1) + entries list (variable) + separator (1) + filename (1) + hint (1)
+    let path_area = Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 };
+    let filename_area = Rect { x: inner.x, y: inner.y + inner.height - 2, width: inner.width, height: 1 };
+    let hint_area = Rect { x: inner.x, y: inner.y + inner.height - 1, width: inner.width, height: 1 };
+    let list_height = inner.height.saturating_sub(4);
+    let list_area = Rect { x: inner.x, y: inner.y + 1, width: inner.width, height: list_height };
+
+    // Path breadcrumb
+    let path_str = browser.current_dir.to_string_lossy();
+    let path_display = if path_str.len() > inner.width as usize - 2 {
+        format!("...{}", &path_str[path_str.len() - (inner.width as usize - 5)..])
+    } else {
+        path_str.to_string()
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled(path_display, Style::default().fg(Color::Yellow)),
+        ])),
+        path_area,
+    );
+
+    // Entry list
+    let visible_start = if browser.cursor >= list_height as usize {
+        browser.cursor - list_height as usize + 1
+    } else {
+        0
+    };
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, entry) in browser.entries.iter().enumerate().skip(visible_start).take(list_height as usize) {
+        let is_selected = i == browser.cursor;
+        let icon = if entry.is_dir { " " } else { "  " };
+        let style = if is_selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else if entry.is_dir {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        lines.push(Line::from(Span::styled(format!(" {}{}", icon, entry.name), style)));
+    }
+    if browser.entries.is_empty() {
+        lines.push(Line::from(Span::styled("  (empty)", Style::default().fg(Color::DarkGray))));
+    }
+    frame.render_widget(Paragraph::new(lines), list_area);
+
+    // Filename field (always editable)
+    let fn_style = Style::default().fg(Color::Cyan);
+    let cursor_indicator = "│";
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" File: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(browser.filename.clone(), fn_style),
+            Span::styled(cursor_indicator.to_string(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        ])),
+        filename_area,
+    );
+
+    // Hint
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            state.locale.hints.export_note.clone(),
+            Style::default().fg(Color::DarkGray),
+        )),
+        hint_area,
+    );
 }
 
 fn render_filter_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
@@ -3721,10 +3422,6 @@ fn render_settings_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: 
         };
         lines.push(form_line_editor(state.locale.form_labels.model.as_str(), model_editor, form.field == 3));
     }
-
-    lines.push(Line::from(""));
-    let gcal_label = if form.gcal_enabled { "← Enabled →" } else { "← Disabled →" };
-    lines.push(form_line(state.locale.form_labels.google_calendar.as_str(), gcal_label.to_string(), form.field == 4));
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -4444,6 +4141,9 @@ fn handle_notes_list_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                     state.notes_title_editor = TextEditor::new();
                     state.notes_editor = TextEditor::new();
                     state.notes_title_focused = true;
+                    state.notes_editor_scroll = 0;
+                    state.notes_undo_stack.clear();
+                    state.notes_redo_stack.clear();
                     state.notes_view = NotesView::Edit;
                     refresh_notes_cache(state);
                     state.notes_cursor = 0;
@@ -4472,6 +4172,9 @@ fn handle_notes_preview_key(state: &mut RuntimeState, key: crossterm::event::Key
                 state.notes_title_editor = TextEditor::from_string(&note.title);
                 state.notes_editor = TextEditor::from_string(&note.body);
                 state.notes_title_focused = true;
+                state.notes_editor_scroll = 0;
+                state.notes_undo_stack.clear();
+                state.notes_redo_stack.clear();
                 state.notes_view = NotesView::Edit;
             }
         }
@@ -4493,8 +4196,95 @@ fn handle_notes_preview_key(state: &mut RuntimeState, key: crossterm::event::Key
                 state.app.modal = Some(Modal::DeleteNote { id });
             }
         }
+        KeyCode::Char('s') => {
+            if let Some(id) = state.notes_current_id {
+                if let Some(note) = state.notes_cache.iter().find(|n| n.id == id) {
+                    let cfg = app_config::load();
+                    let initial_dir = cfg.last_export_dir
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| std::env::var("HOME").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::PathBuf::from("/")));
+                    state.dir_browser.current_dir = initial_dir;
+                    state.dir_browser.note_id = id;
+                    let safe_title: String = note.title.chars()
+                        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+                        .collect();
+                    state.dir_browser.filename = format!("{}.md", safe_title.trim());
+                    state.dir_browser.field = 0;
+                    state.dir_browser.refresh_entries();
+                    state.app.modal = Some(Modal::ExportNote { id });
+                }
+            }
+        }
         _ => {}
     }
+}
+
+fn handle_export_note_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
+    match key.code {
+        KeyCode::Esc => { state.app.modal = None; }
+        KeyCode::Up if state.dir_browser.cursor > 0 => {
+            state.dir_browser.cursor -= 1;
+        }
+        KeyCode::Down
+            if state.dir_browser.cursor + 1 < state.dir_browser.entries.len() => {
+                state.dir_browser.cursor += 1;
+            }
+        KeyCode::Right => {
+            if let Some(entry) = state.dir_browser.entries.get(state.dir_browser.cursor) {
+                if entry.is_dir {
+                    state.dir_browser.current_dir = state.dir_browser.current_dir.join(&entry.name);
+                    state.dir_browser.refresh_entries();
+                }
+            }
+        }
+        KeyCode::Left => {
+            if let Some(parent) = state.dir_browser.current_dir.parent().map(|p| p.to_path_buf()) {
+                state.dir_browser.current_dir = parent;
+                state.dir_browser.refresh_entries();
+            }
+        }
+        KeyCode::Enter => {
+            let is_dir_selected = state.dir_browser.entries
+                .get(state.dir_browser.cursor)
+                .map(|e| e.is_dir)
+                .unwrap_or(false);
+            if is_dir_selected {
+                let name = state.dir_browser.entries[state.dir_browser.cursor].name.clone();
+                state.dir_browser.current_dir = state.dir_browser.current_dir.join(&name);
+                state.dir_browser.refresh_entries();
+            } else {
+                // Confirm export
+                let path = state.dir_browser.current_dir.join(&state.dir_browser.filename);
+                match state.storage.export_note(state.dir_browser.note_id, &path) {
+                    Ok(written) => {
+                        let msg = state.locale.status.note_exported
+                            .replace("{path}", &written.to_string_lossy());
+                        state.app.status_bar = msg;
+                        let mut cfg = app_config::load();
+                        cfg.last_export_dir = Some(state.dir_browser.current_dir.to_string_lossy().to_string());
+                        let _ = app_config::save(&cfg);
+                    }
+                    Err(e) => {
+                        state.app.status_bar = format!("Error: {}", e.message());
+                    }
+                }
+                state.app.modal = None;
+            }
+        }
+        KeyCode::Backspace => { state.dir_browser.filename.pop(); }
+        KeyCode::Char(c) => { state.dir_browser.filename.push(c); }
+        _ => {}
+    }
+}
+
+fn notes_push_undo(state: &mut RuntimeState) {
+    let snapshot = (
+        state.notes_editor.lines().to_vec(),
+        state.notes_editor.cursor_row(),
+        state.notes_editor.cursor_col(),
+    );
+    state.notes_undo_stack.push(snapshot);
+    state.notes_redo_stack.clear();
 }
 
 fn handle_notes_edit_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
@@ -4509,6 +4299,28 @@ fn handle_notes_edit_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
         }
         KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.notes_title_focused = !state.notes_title_focused;
+        }
+        KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) && !state.notes_title_focused => {
+            if let Some((lines, row, col)) = state.notes_undo_stack.pop() {
+                let current = (
+                    state.notes_editor.lines().to_vec(),
+                    state.notes_editor.cursor_row(),
+                    state.notes_editor.cursor_col(),
+                );
+                state.notes_redo_stack.push(current);
+                state.notes_editor = TextEditor::from_lines(lines, row, col);
+            }
+        }
+        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) && !state.notes_title_focused => {
+            if let Some((lines, row, col)) = state.notes_redo_stack.pop() {
+                let current = (
+                    state.notes_editor.lines().to_vec(),
+                    state.notes_editor.cursor_row(),
+                    state.notes_editor.cursor_col(),
+                );
+                state.notes_undo_stack.push(current);
+                state.notes_editor = TextEditor::from_lines(lines, row, col);
+            }
         }
         _ => {
             if state.notes_title_focused {
@@ -4529,19 +4341,20 @@ fn handle_notes_edit_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                     KeyCode::Char(c) => {
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             match c {
-                                'u' => { state.notes_editor.kill_to_start(); }
-                                'k' => { state.notes_editor.kill_to_end(); }
+                                'u' => { notes_push_undo(state); state.notes_editor.kill_to_start(); }
+                                'k' => { notes_push_undo(state); state.notes_editor.kill_to_end(); }
                                 'a' => { state.notes_editor.move_home(); }
                                 'e' => { state.notes_editor.move_end(); }
                                 _ => {}
                             }
                         } else {
+                            notes_push_undo(state);
                             state.notes_editor.insert_char(c);
                         }
                     }
-                    KeyCode::Enter => { state.notes_editor.insert_newline(); }
-                    KeyCode::Backspace => { state.notes_editor.backspace(); }
-                    KeyCode::Delete => { state.notes_editor.delete(); }
+                    KeyCode::Enter => { notes_push_undo(state); state.notes_editor.insert_newline(); }
+                    KeyCode::Backspace => { notes_push_undo(state); state.notes_editor.backspace(); }
+                    KeyCode::Delete => { notes_push_undo(state); state.notes_editor.delete(); }
                     KeyCode::Left => { state.notes_editor.move_left(); }
                     KeyCode::Right => { state.notes_editor.move_right(); }
                     KeyCode::Up => { state.notes_editor.move_up(); }
@@ -4689,7 +4502,7 @@ fn render_note_preview(frame: &mut ratatui::Frame, state: &RuntimeState, area: R
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(1)])
+        .constraints([Constraint::Length(2), Constraint::Min(1), Constraint::Length(1)])
         .split(area);
 
     let title_display = if note.title.is_empty() {
@@ -4709,9 +4522,13 @@ fn render_note_preview(frame: &mut ratatui::Frame, state: &RuntimeState, area: R
     let visible: Vec<ratatui::text::Line<'_>> = rendered.into_iter().skip(scroll).take(avail).collect();
     let body_para = Paragraph::new(visible);
     frame.render_widget(body_para, chunks[1]);
+
+    let hint_para = Paragraph::new(state.locale.hints.notes_preview.as_str())
+        .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(hint_para, chunks[2]);
 }
 
-fn render_note_edit(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+fn render_note_edit(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(1)])
@@ -4740,6 +4557,9 @@ fn render_note_edit(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect
     };
 
     let input_w = chunks[1].width.saturating_sub(1) as usize;
+    let avail = chunks[1].height as usize;
+
+    // Build all visual lines from logical lines
     let mut body_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
     for logical_line in state.notes_editor.lines() {
         if input_w == 0 {
@@ -4756,26 +4576,43 @@ fn render_note_edit(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect
         }
     }
 
-    let body_para = Paragraph::new(body_lines).style(body_style);
-    frame.render_widget(body_para, chunks[1]);
-
-    // Set cursor position in edit mode
+    // Calculate cursor's visual row
+    let mut cursor_visual_row: usize = 0;
     if !state.notes_title_focused && input_w > 0 {
         let (row, col) = (state.notes_editor.cursor_row(), state.notes_editor.cursor_col());
-        let mut visual_row: u16 = 0;
-        let mut visual_col: u16 = 0;
         for (i, logical_line) in state.notes_editor.lines().iter().enumerate() {
             let char_count = logical_line.chars().count();
-            let n_visual = (char_count / input_w) + 1;
+            let n_visual = if char_count == 0 { 1 } else { (char_count.saturating_sub(1) / input_w) + 1 };
             if i == row {
-                visual_row += (col / input_w) as u16;
-                visual_col = (col % input_w) as u16;
+                cursor_visual_row += col / input_w;
                 break;
             }
-            visual_row += n_visual as u16;
+            cursor_visual_row += n_visual;
         }
+    }
+
+    // Auto-scroll: ensure cursor is visible
+    if cursor_visual_row < state.notes_editor_scroll {
+        state.notes_editor_scroll = cursor_visual_row;
+    } else if cursor_visual_row >= state.notes_editor_scroll + avail {
+        state.notes_editor_scroll = cursor_visual_row - avail + 1;
+    }
+
+    let scroll = state.notes_editor_scroll;
+    let visible: Vec<ratatui::text::Line<'static>> = body_lines.into_iter()
+        .skip(scroll)
+        .take(avail)
+        .collect();
+    let body_para = Paragraph::new(visible).style(body_style);
+    frame.render_widget(body_para, chunks[1]);
+
+    // Set cursor position
+    if !state.notes_title_focused && input_w > 0 {
+        let col = state.notes_editor.cursor_col();
+        let visual_col = (col % input_w) as u16;
+        let screen_row = (cursor_visual_row - scroll) as u16;
         let x = chunks[1].x + visual_col;
-        let y = chunks[1].y + visual_row;
+        let y = chunks[1].y + screen_row;
         if x < chunks[1].x + chunks[1].width && y < chunks[1].y + chunks[1].height {
             frame.set_cursor_position((x, y));
         }
@@ -4793,19 +4630,10 @@ fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         let para = Paragraph::new(text).style(Style::default().fg(Color::Yellow));
         frame.render_widget(para, area);
     } else {
-        let sync_prefix = match &state.sync_status {
-            SyncStatus::Syncing => "↻ ",
-            SyncStatus::Idle => "☁ ",
-            SyncStatus::Error(msg) => {
-                let _ = msg; // used below
-                "⚠ "
-            }
-            SyncStatus::Disabled => "",
-        };
         let text = if state.app.status_bar.is_empty() {
-            format!("{}{}", sync_prefix, hint)
+            hint.to_string()
         } else {
-            format!("{}{}  │  {}", sync_prefix, state.app.status_bar, hint)
+            format!("{}  │  {}", state.app.status_bar, hint)
         };
         let para = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(para, area);

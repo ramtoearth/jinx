@@ -194,6 +194,8 @@ pub enum MessageType {
     // --- Storage: tasks ----------------------------------------------------
     #[serde(rename = "storage.list_tasks")]
     StorageListTasks,
+    #[serde(rename = "storage.search_tasks")]
+    StorageSearchTasks,
     #[serde(rename = "storage.create_task")]
     StorageCreateTask,
     #[serde(rename = "storage.update_task")]
@@ -231,10 +233,6 @@ pub enum MessageType {
     #[serde(rename = "storage.export_sqlite")]
     StorageExportSqlite,
 
-    // --- Storage: sync ----------------------------------------------------
-    #[serde(rename = "storage.sync_google")]
-    StorageSyncGoogle,
-
     // --- Storage: notes ---------------------------------------------------
     #[serde(rename = "storage.list_notes")]
     StorageListNotes,
@@ -246,6 +244,8 @@ pub enum MessageType {
     StorageUpdateNote,
     #[serde(rename = "storage.delete_note")]
     StorageDeleteNote,
+    #[serde(rename = "storage.export_note")]
+    StorageExportNote,
 }
 
 // ---------------------------------------------------------------------------
@@ -458,6 +458,16 @@ pub struct StorageListTasksRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StorageListTasksResponse {
+    pub tasks: Vec<StorageTaskDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageSearchTasksRequest {
+    pub query: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageSearchTasksResponse {
     pub tasks: Vec<StorageTaskDto>,
 }
 
@@ -706,6 +716,17 @@ pub struct StorageDeleteNoteRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct StorageDeleteNoteResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageExportNoteRequest {
+    pub id: i64,
+    pub output_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageExportNoteResponse {
+    pub written_path: String,
+}
 
 // ---------------------------------------------------------------------------
 // Tests — minimal smoke checks wiring the types together. The full

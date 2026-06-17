@@ -104,6 +104,31 @@ def list_tasks(
 
 
 @tool
+def search_tasks(query: str) -> List[Dict[str, Any]]:
+    """Search tasks by title (case-insensitive). Returns all matching tasks regardless of status.
+
+    query: text to search for in task titles, e.g. "community builder" or "deploy".
+           Pass a simple string, not JSON.
+    Use this when the user asks to find, locate, or check for tasks by name/topic.
+    Returns a list of matching task dicts (may include completed/cancelled tasks).
+    """
+    import json as _j
+    import re as _re
+    try:
+        parsed = _j.loads(query)
+        if isinstance(parsed, dict):
+            query = parsed.get("query") or parsed.get("search_term") or query
+    except (ValueError, TypeError):
+        pass
+    m = _re.search(r'["\']?\s*:\s*["\'](.+?)["\']', query)
+    if m and ('"' in query or "query" in query or "search_term" in query):
+        query = m.group(1)
+    result = _send("storage.search_tasks", {"query": query})
+    return result.get("tasks", [])
+
+
+
+@tool
 def create_task(
     title: str,
     priority: Optional[str] = None,
@@ -398,17 +423,6 @@ def export_sqlite(output_path: str) -> str:
     return result["written_path"]
 
 
-@tool
-def sync_google() -> str:
-    """Synchronize with Google Calendar and Google Tasks.
-
-    Pushes local changes to Google and pulls remote changes into jinx.
-    Returns a status message indicating what was synced.
-    """
-    result = _send("storage.sync_google")
-    return result.get("status", "Sync completed.")
-
-
 # ---------------------------------------------------------------------------
 # Notes
 # ---------------------------------------------------------------------------
@@ -519,3 +533,16 @@ def delete_note(id: int) -> None:
     id: note ID to delete
     """
     _send("storage.delete_note", {"id": id})
+
+
+@tool
+def export_note(id: int, output_path: str) -> str:
+    """Export a single note to a Markdown file.
+
+    id: note ID to export (call list_notes or search_notes first to find it)
+    output_path: absolute file path to write, e.g. "/tmp/my-note.md"
+    Do NOT use export_markdown for individual notes — that exports all tasks/events.
+    Returns the written file path.
+    """
+    result = _send("storage.export_note", {"id": id, "output_path": output_path})
+    return result["written_path"]

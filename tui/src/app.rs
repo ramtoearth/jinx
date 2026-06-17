@@ -69,6 +69,7 @@ pub enum Modal {
     Error { message: String },
     Settings,
     DeleteNote { id: i64 },
+    ExportNote { id: i64 },
 }
 
 // ---------------------------------------------------------------------------
