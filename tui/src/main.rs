@@ -28,10 +28,13 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs},
     Terminal,
 };
-use storage::{
-    EventPatch, Group, HexColor, NewEvent, NewGroup, NewTask, Priority, SqliteStorage, Storage,
+use domain::{
+    EventPatch, Group, HexColor, NewEvent, NewGroup, NewTask, Priority,
     TaskFilter, TaskPatch, TaskStatus,
+    task::TaskRepository, calendar::EventRepository, group::GroupRepository,
+    note::NoteRepository,
 };
+use infrastructure::SqliteStorage;
 use uuid::Uuid;
 
 use jinx::app::{AppEvent, AppState, Modal, Panel, MIN_COLS, MIN_ROWS};
@@ -698,14 +701,14 @@ fn date_input_line(label: &str, input: &DateTimeInput, field_active: bool, hint_
 
 fn main() -> io::Result<()> {
     // -- Storage -----------------------------------------------------------
-    let db_path = match storage::resolve_db_path() {
+    let db_path = match infrastructure::resolve_db_path() {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Cannot resolve database path: {e}");
             std::process::exit(1);
         }
     };
-    let storage: Arc<dyn Storage + Send + Sync> = Arc::new(
+    let storage: Arc<SqliteStorage> = Arc::new(
         SqliteStorage::open(&db_path).unwrap_or_else(|e| {
             eprintln!("Cannot open database: {e}");
             std::process::exit(1);
@@ -820,7 +823,7 @@ struct RuntimeState {
     tareas_section: TareasSection,
     tareas_filter: ActiveTaskFilter,
     color_mode: ColorMode,
-    storage: Arc<dyn Storage + Send + Sync>,
+    storage: Arc<SqliteStorage>,
     agent_child: Option<Child>,
     agent_stdin: Option<ChildStdin>,
     agent_rx: Option<mpsc::Receiver<Envelope>>,
@@ -836,7 +839,7 @@ struct RuntimeState {
     delete_confirm_name: String,
     pending_g: bool,
     // Notes panel state
-    notes_cache: Vec<storage::Note>,
+    notes_cache: Vec<domain::Note>,
     notes_cursor: usize,
     notes_scroll: usize,
     notes_view: NotesView,
@@ -870,7 +873,7 @@ struct RuntimeState {
 
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    storage: Arc<dyn Storage + Send + Sync>,
+    storage: Arc<SqliteStorage>,
 ) -> io::Result<()> {
     let (size_cols, size_rows) = {
         let size = terminal.size()?;
@@ -1513,7 +1516,7 @@ fn handle_tareas_search_key(state: &mut RuntimeState, key: crossterm::event::Key
     }
 }
 
-fn get_search_filtered_tasks(state: &RuntimeState) -> Vec<storage::Task> {
+fn get_search_filtered_tasks(state: &RuntimeState) -> Vec<domain::Task> {
     let mut tasks = get_filtered_tasks(state);
     if !state.tareas_search_query.is_empty() {
         let query = state.tareas_search_query.to_lowercase();
@@ -1556,7 +1559,7 @@ fn handle_tareas_groups_key(state: &mut RuntimeState, key: crossterm::event::Key
     }
 }
 
-fn get_filtered_tasks(state: &RuntimeState) -> Vec<storage::Task> {
+fn get_filtered_tasks(state: &RuntimeState) -> Vec<domain::Task> {
     let mut tasks = state
         .storage
         .list_tasks(state.tareas_filter.to_storage_filter())
@@ -4132,7 +4135,7 @@ fn handle_notes_list_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
             }
         }
         KeyCode::Char('n') => {
-            match state.storage.create_note(storage::NewNote {
+            match state.storage.create_note(domain::NewNote {
                 title: String::new(),
                 body: String::new(),
             }) {
@@ -4377,7 +4380,7 @@ fn save_current_note(state: &mut RuntimeState) {
         } else {
             title
         };
-        match state.storage.update_note(id, storage::NotePatch {
+        match state.storage.update_note(id, domain::NotePatch {
             title: Some(title_val),
             body: Some(body),
         }) {
@@ -4659,7 +4662,7 @@ mod tests {
         let storage = Arc::new(SqliteStorage::in_memory().expect("in-memory"));
         let mut app = AppState::new(120, 40);
 
-        let err = storage::StorageError::NotFound("Task 99 not found".to_string());
+        let err = domain::DomainError::NotFound("Task 99 not found".to_string());
         app = jinx::app::reduce(
             app,
             AppEvent::StorageError(err.clone()),

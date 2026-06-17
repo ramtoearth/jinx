@@ -5,10 +5,11 @@
 
 use std::sync::Arc;
 
-use storage::{
-    EventPatch, HexColor, NewEvent, NewGroup, NewNote, NewTask, NotePatch, Priority, Storage,
-    StorageError, TaskFilter, TaskPatch, TaskStatus,
+use domain::{
+    DomainError, EventPatch, HexColor, NewEvent, NewGroup, NewNote, NewTask, NotePatch, Priority,
+    TaskFilter, TaskPatch, TaskStatus,
 };
+use infrastructure::SqliteStorage;
 
 use crate::ipc::{
     Envelope, Kind, MessageType, StorageCompleteTaskRequest, StorageCompleteTaskResponse,
@@ -34,7 +35,7 @@ use crate::ipc::{
 // DTO conversions
 // ---------------------------------------------------------------------------
 
-fn task_to_dto(t: storage::Task) -> StorageTaskDto {
+fn task_to_dto(t: domain::Task) -> StorageTaskDto {
     use crate::ipc::{Priority as IpcPriority, TaskStatus as IpcTaskStatus};
     StorageTaskDto {
         id: t.id,
@@ -55,7 +56,7 @@ fn task_to_dto(t: storage::Task) -> StorageTaskDto {
     }
 }
 
-fn event_to_dto(e: storage::Event) -> StorageEventDto {
+fn event_to_dto(e: domain::Event) -> StorageEventDto {
     StorageEventDto {
         id: e.id,
         title: e.title,
@@ -66,7 +67,7 @@ fn event_to_dto(e: storage::Event) -> StorageEventDto {
     }
 }
 
-fn group_to_dto(g: storage::Group) -> StorageGroupDto {
+fn group_to_dto(g: domain::Group) -> StorageGroupDto {
     StorageGroupDto {
         id: g.id,
         name: g.name,
@@ -74,7 +75,7 @@ fn group_to_dto(g: storage::Group) -> StorageGroupDto {
     }
 }
 
-fn note_to_dto(n: storage::Note) -> StorageNoteDto {
+fn note_to_dto(n: domain::Note) -> StorageNoteDto {
     StorageNoteDto {
         id: n.id,
         title: n.title,
@@ -84,7 +85,7 @@ fn note_to_dto(n: storage::Note) -> StorageNoteDto {
     }
 }
 
-fn storage_err_to_ipc(e: StorageError) -> IpcError {
+fn domain_err_to_ipc(e: DomainError) -> IpcError {
     IpcError {
         code: e.code().to_string(),
         message: e.message(),
@@ -98,8 +99,12 @@ fn storage_err_to_ipc(e: StorageError) -> IpcError {
 /// Handle a single `storage.*` request envelope and return a response envelope.
 pub fn handle_storage_request(
     envelope: &Envelope,
-    storage: &Arc<dyn Storage + Send + Sync>,
+    storage: &Arc<SqliteStorage>,
 ) -> Envelope {
+    use domain::task::TaskRepository;
+    use domain::calendar::EventRepository;
+    use domain::group::GroupRepository;
+    use domain::note::NoteRepository;
     let response_base = Envelope::new_empty(Kind::Response, envelope.message_type)
         .with_ref(envelope.id);
 
@@ -131,7 +136,7 @@ pub fn handle_storage_request(
                         tasks: tasks.into_iter().map(task_to_dto).collect(),
                     })
                     .unwrap_or(response_base),
-                Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                Err(e) => response_base.with_error(domain_err_to_ipc(e)),
             }
         }
 
@@ -146,7 +151,7 @@ pub fn handle_storage_request(
                             tasks: tasks.into_iter().map(task_to_dto).collect(),
                         })
                         .unwrap_or(response_base),
-                    Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                 },
             }
         }
@@ -172,7 +177,7 @@ pub fn handle_storage_request(
                         Ok(t) => response_base.clone()
                             .with_payload(&StorageCreateTaskResponse { task: task_to_dto(t) })
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }
@@ -204,7 +209,7 @@ pub fn handle_storage_request(
                         Ok(t) => response_base.clone()
                             .with_payload(&StorageUpdateTaskResponse { task: task_to_dto(t) })
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }
@@ -219,7 +224,7 @@ pub fn handle_storage_request(
                     Ok(t) => response_base.clone()
                         .with_payload(&StorageCompleteTaskResponse { task: task_to_dto(t) })
                         .unwrap_or(response_base),
-                    Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                 },
             }
         }
@@ -233,7 +238,7 @@ pub fn handle_storage_request(
                     Ok(()) => response_base.clone()
                         .with_payload(&StorageDeleteTaskResponse {})
                         .unwrap_or(response_base),
-                    Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                 },
             }
         }
@@ -253,7 +258,7 @@ pub fn handle_storage_request(
                         events: events.into_iter().map(event_to_dto).collect(),
                     })
                     .unwrap_or(response_base),
-                Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                Err(e) => response_base.with_error(domain_err_to_ipc(e)),
             }
         }
 
@@ -274,7 +279,7 @@ pub fn handle_storage_request(
                         Ok(e) => response_base.clone()
                             .with_payload(&StorageCreateEventResponse { event: event_to_dto(e) })
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }
@@ -297,7 +302,7 @@ pub fn handle_storage_request(
                         Ok(e) => response_base.clone()
                             .with_payload(&StorageUpdateEventResponse { event: event_to_dto(e) })
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }
@@ -312,7 +317,7 @@ pub fn handle_storage_request(
                     Ok(()) => response_base.clone()
                         .with_payload(&StorageDeleteEventResponse {})
                         .unwrap_or(response_base),
-                    Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                 },
             }
         }
@@ -327,7 +332,7 @@ pub fn handle_storage_request(
                         groups: groups.into_iter().map(group_to_dto).collect(),
                     })
                     .unwrap_or(response_base),
-                Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                Err(e) => response_base.with_error(domain_err_to_ipc(e)),
             }
         }
 
@@ -343,7 +348,7 @@ pub fn handle_storage_request(
                             Ok(g) => response_base.clone()
                                 .with_payload(&StorageCreateGroupResponse { group: group_to_dto(g) })
                                 .unwrap_or(response_base),
-                            Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                            Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                         },
                     }
                 }
@@ -359,7 +364,7 @@ pub fn handle_storage_request(
                     Ok(g) => response_base.clone()
                         .with_payload(&StorageRenameGroupResponse { group: group_to_dto(g) })
                         .unwrap_or(response_base),
-                    Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                 },
             }
         }
@@ -376,7 +381,7 @@ pub fn handle_storage_request(
                             Ok(g) => response_base.clone()
                                 .with_payload(&StorageRecolorGroupResponse { group: group_to_dto(g) })
                                 .unwrap_or(response_base),
-                            Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                            Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                         },
                     }
                 }
@@ -392,7 +397,7 @@ pub fn handle_storage_request(
                     Ok(()) => response_base.clone()
                         .with_payload(&StorageDeleteGroupResponse {})
                         .unwrap_or(response_base),
-                    Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                 },
             }
         }
@@ -413,7 +418,7 @@ pub fn handle_storage_request(
                                 written_path: p.to_string_lossy().to_string(),
                             })
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }
@@ -432,7 +437,7 @@ pub fn handle_storage_request(
                                 written_path: p.to_string_lossy().to_string(),
                             })
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }
@@ -448,7 +453,7 @@ pub fn handle_storage_request(
                         notes: notes.into_iter().map(note_to_dto).collect(),
                     })
                     .unwrap_or(response_base),
-                Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                Err(e) => response_base.with_error(domain_err_to_ipc(e)),
             }
         }
 
@@ -464,7 +469,7 @@ pub fn handle_storage_request(
                                 notes: notes.into_iter().map(note_to_dto).collect(),
                             })
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }
@@ -484,7 +489,7 @@ pub fn handle_storage_request(
                         Ok(n) => response_base.clone()
                             .with_payload(&StorageCreateNoteResponse { note: note_to_dto(n) })
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }
@@ -504,7 +509,7 @@ pub fn handle_storage_request(
                         Ok(n) => response_base.clone()
                             .with_payload(&StorageUpdateNoteResponse { note: note_to_dto(n) })
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }
@@ -520,7 +525,7 @@ pub fn handle_storage_request(
                         Ok(()) => response_base.clone()
                             .with_payload(&StorageDeleteNoteResponse {})
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }
@@ -539,7 +544,7 @@ pub fn handle_storage_request(
                                 written_path: p.to_string_lossy().to_string(),
                             })
                             .unwrap_or(response_base),
-                        Err(e) => response_base.with_error(storage_err_to_ipc(e)),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
             }

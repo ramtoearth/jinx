@@ -2,7 +2,7 @@
 // Property tests P8, P9, P10 for Panel_Proximos and Panel_Calendario.
 
 use proptest::prelude::*;
-use storage::{Event, Priority, Task, TaskStatus};
+use domain::{Event, Priority, Task, TaskStatus};
 use jinx::calendario::{CalendarView, TASK_PREFIX, EVENT_PREFIX, calendar_layout};
 use jinx::proximos::{EntryKind, ProximosEntry, proximos};
 

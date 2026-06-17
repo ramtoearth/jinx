@@ -3,7 +3,7 @@
 //! All logic is implemented as a pure function over a storage snapshot so it
 //! can be property-tested (Properties 8, 9) without a running terminal.
 
-use storage::{Event, Task};
+use domain::{Event, Task};
 
 /// A single entry shown in Panel_Proximos.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,7 +20,7 @@ pub struct ProximosEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
-    Task { priority: storage::Priority },
+    Task { priority: domain::Priority },
     Event,
 }
 
@@ -139,7 +139,7 @@ pub fn days_in_month(year: u32, month: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::{Priority, TaskStatus};
+    use domain::{Priority, TaskStatus};
 
     fn make_task(deadline: Option<&str>, priority: Priority) -> Task {
         Task {

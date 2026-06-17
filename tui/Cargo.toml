@@ -14,7 +14,8 @@ name = "jinx"
 path = "src/main.rs"
 
 [dependencies]
-storage = { path = "../storage" }
+domain = { path = "../domain" }
+infrastructure = { path = "../infrastructure" }
 ratatui.workspace = true
 crossterm.workspace = true
 serde.workspace = true

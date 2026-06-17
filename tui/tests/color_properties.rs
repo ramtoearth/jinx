@@ -3,7 +3,7 @@
 // Properties 22 and 23.
 
 use proptest::prelude::*;
-use storage::HexColor;
+use domain::HexColor;
 use jinx::color::{ColorMode, nearest_xterm256, resolve_style, XTERM256_PALETTE};
 
 fn arb_hex() -> impl Strategy<Value = HexColor> {

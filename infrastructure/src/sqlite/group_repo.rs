@@ -53,7 +53,7 @@ impl GroupRepository for SqliteStorage {
                         id: row.get(0)?,
                         name: row.get(1)?,
                         color: HexColor::new(
-                            &row.get::<_, String>(2).unwrap_or_default()
+                            row.get::<_, String>(2).unwrap_or_default()
                         ).unwrap_or_else(|_| HexColor::new("#000000").unwrap()),
                     })
                 },

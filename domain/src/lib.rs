@@ -14,7 +14,7 @@ pub use task::{
 
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DomainError {
     #[error("not found: {0}")]
     NotFound(String),
