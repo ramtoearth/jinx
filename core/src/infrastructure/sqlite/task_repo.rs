@@ -106,19 +106,40 @@ impl TaskRepository for SqliteStorage {
 
     fn search_tasks(&self, query: &str) -> Result<Vec<Task>, DomainError> {
         let conn = self.conn.lock().unwrap();
-        let pattern = format!("%{query}%");
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, title, priority, status, created_at, deadline, group_id
-                 FROM tasks
-                 WHERE title LIKE ?1
-                 ORDER BY
-                   CASE priority WHEN 'alta' THEN 1 WHEN 'media' THEN 2 ELSE 3 END,
-                   CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
-                   deadline ASC",
+        let words: Vec<&str> = query.split_whitespace().filter(|w| !w.is_empty()).collect();
+        if words.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conditions: Vec<String> = words.iter().map(|_| "title LIKE ?".to_string()).collect();
+        let where_clause = conditions.join(" OR ");
+        let sql = format!(
+            "SELECT id, title, priority, status, created_at, deadline, group_id
+             FROM tasks
+             WHERE {where_clause}
+             ORDER BY
+               CASE priority WHEN 'alta' THEN 1 WHEN 'media' THEN 2 ELSE 3 END,
+               CASE WHEN deadline IS NULL THEN 1 ELSE 0 END,
+               deadline ASC"
+        );
+
+        let patterns: Vec<String> = words.iter().map(|w| {
+            let char_count = w.chars().count();
+            let prefix = if char_count > 4 {
+                let end = w.char_indices().nth(char_count - 2).map(|(i, _)| i).unwrap_or(w.len());
+                &w[..end]
+            } else {
+                w
+            };
+            format!("%{prefix}%")
+        }).collect();
+        let mut stmt = conn.prepare(&sql).map_err(map_err)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(patterns.iter()),
+                map_task,
             )
             .map_err(map_err)?;
-        let rows = stmt.query_map(params![pattern], map_task).map_err(map_err)?;
         let mut tasks = vec![];
         for row in rows {
             tasks.push(row.map_err(map_err)?);
