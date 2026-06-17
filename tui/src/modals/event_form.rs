@@ -14,13 +14,13 @@ use crate::state::*;
 use jinx::text_editor::TextEditor;
 
 pub(crate) fn open_new_event_modal(state: &mut RuntimeState) {
-    super::super::refresh_groups_cache(state);
+    crate::panels::refresh_groups_cache(state);
     state.event_form = EventFormState::default();
     state.app.modal = Some(jinx::app::Modal::NewEvent);
 }
 
 pub(crate) fn open_edit_event_modal(state: &mut RuntimeState, id: i64) {
-    super::super::refresh_groups_cache(state);
+    crate::panels::refresh_groups_cache(state);
     let events = state.storage.list_events(None, None).unwrap_or_default();
     if let Some(ev) = events.iter().find(|e| e.id == id) {
         let group_idx = ev.group_id

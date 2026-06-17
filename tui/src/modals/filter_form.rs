@@ -10,7 +10,7 @@ use domain::{Priority, TaskStatus};
 use crate::state::*;
 
 pub(crate) fn open_filter_modal(state: &mut RuntimeState) {
-    super::super::refresh_groups_cache(state);
+    crate::panels::refresh_groups_cache(state);
     let (date_idx, date_from, date_to) = if state.tareas_filter.no_deadline {
         (7, DateTimeInput::date_only_disabled(), DateTimeInput::date_only_disabled())
     } else {

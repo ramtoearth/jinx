@@ -61,7 +61,7 @@ pub(crate) fn handle_modal_key(state: &mut RuntimeState, key: KeyEvent) {
                     s.app.status_bar = s.locale.status.note_deleted.clone();
                     s.notes_view = NotesView::List;
                     s.notes_current_id = None;
-                    super::refresh_notes_cache(s);
+                    crate::panels::refresh_notes_cache(s);
                     if s.notes_cursor > 0 { s.notes_cursor -= 1; }
                 }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
