@@ -44,6 +44,10 @@ impl TextEditor {
         Self { lines, cursor_row, cursor_col }
     }
 
+    pub fn from_lines(lines: Vec<String>, cursor_row: usize, cursor_col: usize) -> Self {
+        Self { lines, cursor_row, cursor_col }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.lines.iter().all(|l| l.trim().is_empty())
     }

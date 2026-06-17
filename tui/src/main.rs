@@ -888,6 +888,9 @@ struct RuntimeState {
     notes_search_query: String,
     notes_current_id: Option<i64>,
     notes_preview_scroll: usize,
+    notes_editor_scroll: usize,
+    notes_undo_stack: Vec<(Vec<String>, usize, usize)>,
+    notes_redo_stack: Vec<(Vec<String>, usize, usize)>,
     notes_pending_g: bool,
     // Note picker (interactive results in chat)
     last_note_results: Option<Vec<NotePickerEntry>>,
@@ -968,6 +971,9 @@ fn run_app(
         notes_search_query: String::new(),
         notes_current_id: None,
         notes_preview_scroll: 0,
+        notes_editor_scroll: 0,
+        notes_undo_stack: Vec::new(),
+        notes_redo_stack: Vec::new(),
         notes_pending_g: false,
         last_note_results: None,
         note_picker_active: false,
@@ -4591,6 +4597,9 @@ fn handle_notes_list_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                     state.notes_title_editor = TextEditor::new();
                     state.notes_editor = TextEditor::new();
                     state.notes_title_focused = true;
+                    state.notes_editor_scroll = 0;
+                    state.notes_undo_stack.clear();
+                    state.notes_redo_stack.clear();
                     state.notes_view = NotesView::Edit;
                     refresh_notes_cache(state);
                     state.notes_cursor = 0;
@@ -4619,6 +4628,9 @@ fn handle_notes_preview_key(state: &mut RuntimeState, key: crossterm::event::Key
                 state.notes_title_editor = TextEditor::from_string(&note.title);
                 state.notes_editor = TextEditor::from_string(&note.body);
                 state.notes_title_focused = true;
+                state.notes_editor_scroll = 0;
+                state.notes_undo_stack.clear();
+                state.notes_redo_stack.clear();
                 state.notes_view = NotesView::Edit;
             }
         }
@@ -4724,6 +4736,16 @@ fn handle_export_note_key(state: &mut RuntimeState, key: crossterm::event::KeyEv
     }
 }
 
+fn notes_push_undo(state: &mut RuntimeState) {
+    let snapshot = (
+        state.notes_editor.lines().to_vec(),
+        state.notes_editor.cursor_row(),
+        state.notes_editor.cursor_col(),
+    );
+    state.notes_undo_stack.push(snapshot);
+    state.notes_redo_stack.clear();
+}
+
 fn handle_notes_edit_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
     match key.code {
         KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -4736,6 +4758,28 @@ fn handle_notes_edit_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
         }
         KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.notes_title_focused = !state.notes_title_focused;
+        }
+        KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) && !state.notes_title_focused => {
+            if let Some((lines, row, col)) = state.notes_undo_stack.pop() {
+                let current = (
+                    state.notes_editor.lines().to_vec(),
+                    state.notes_editor.cursor_row(),
+                    state.notes_editor.cursor_col(),
+                );
+                state.notes_redo_stack.push(current);
+                state.notes_editor = TextEditor::from_lines(lines, row, col);
+            }
+        }
+        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) && !state.notes_title_focused => {
+            if let Some((lines, row, col)) = state.notes_redo_stack.pop() {
+                let current = (
+                    state.notes_editor.lines().to_vec(),
+                    state.notes_editor.cursor_row(),
+                    state.notes_editor.cursor_col(),
+                );
+                state.notes_undo_stack.push(current);
+                state.notes_editor = TextEditor::from_lines(lines, row, col);
+            }
         }
         _ => {
             if state.notes_title_focused {
@@ -4756,19 +4800,20 @@ fn handle_notes_edit_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                     KeyCode::Char(c) => {
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             match c {
-                                'u' => { state.notes_editor.kill_to_start(); }
-                                'k' => { state.notes_editor.kill_to_end(); }
+                                'u' => { notes_push_undo(state); state.notes_editor.kill_to_start(); }
+                                'k' => { notes_push_undo(state); state.notes_editor.kill_to_end(); }
                                 'a' => { state.notes_editor.move_home(); }
                                 'e' => { state.notes_editor.move_end(); }
                                 _ => {}
                             }
                         } else {
+                            notes_push_undo(state);
                             state.notes_editor.insert_char(c);
                         }
                     }
-                    KeyCode::Enter => { state.notes_editor.insert_newline(); }
-                    KeyCode::Backspace => { state.notes_editor.backspace(); }
-                    KeyCode::Delete => { state.notes_editor.delete(); }
+                    KeyCode::Enter => { notes_push_undo(state); state.notes_editor.insert_newline(); }
+                    KeyCode::Backspace => { notes_push_undo(state); state.notes_editor.backspace(); }
+                    KeyCode::Delete => { notes_push_undo(state); state.notes_editor.delete(); }
                     KeyCode::Left => { state.notes_editor.move_left(); }
                     KeyCode::Right => { state.notes_editor.move_right(); }
                     KeyCode::Up => { state.notes_editor.move_up(); }
@@ -4942,7 +4987,7 @@ fn render_note_preview(frame: &mut ratatui::Frame, state: &RuntimeState, area: R
     frame.render_widget(hint_para, chunks[2]);
 }
 
-fn render_note_edit(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
+fn render_note_edit(frame: &mut ratatui::Frame, state: &mut RuntimeState, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(1)])
@@ -4971,6 +5016,9 @@ fn render_note_edit(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect
     };
 
     let input_w = chunks[1].width.saturating_sub(1) as usize;
+    let avail = chunks[1].height as usize;
+
+    // Build all visual lines from logical lines
     let mut body_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
     for logical_line in state.notes_editor.lines() {
         if input_w == 0 {
@@ -4987,26 +5035,43 @@ fn render_note_edit(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect
         }
     }
 
-    let body_para = Paragraph::new(body_lines).style(body_style);
-    frame.render_widget(body_para, chunks[1]);
-
-    // Set cursor position in edit mode
+    // Calculate cursor's visual row
+    let mut cursor_visual_row: usize = 0;
     if !state.notes_title_focused && input_w > 0 {
         let (row, col) = (state.notes_editor.cursor_row(), state.notes_editor.cursor_col());
-        let mut visual_row: u16 = 0;
-        let mut visual_col: u16 = 0;
         for (i, logical_line) in state.notes_editor.lines().iter().enumerate() {
             let char_count = logical_line.chars().count();
-            let n_visual = (char_count / input_w) + 1;
+            let n_visual = if char_count == 0 { 1 } else { (char_count.saturating_sub(1) / input_w) + 1 };
             if i == row {
-                visual_row += (col / input_w) as u16;
-                visual_col = (col % input_w) as u16;
+                cursor_visual_row += col / input_w;
                 break;
             }
-            visual_row += n_visual as u16;
+            cursor_visual_row += n_visual;
         }
+    }
+
+    // Auto-scroll: ensure cursor is visible
+    if cursor_visual_row < state.notes_editor_scroll {
+        state.notes_editor_scroll = cursor_visual_row;
+    } else if cursor_visual_row >= state.notes_editor_scroll + avail {
+        state.notes_editor_scroll = cursor_visual_row - avail + 1;
+    }
+
+    let scroll = state.notes_editor_scroll;
+    let visible: Vec<ratatui::text::Line<'static>> = body_lines.into_iter()
+        .skip(scroll)
+        .take(avail)
+        .collect();
+    let body_para = Paragraph::new(visible).style(body_style);
+    frame.render_widget(body_para, chunks[1]);
+
+    // Set cursor position
+    if !state.notes_title_focused && input_w > 0 {
+        let col = state.notes_editor.cursor_col();
+        let visual_col = (col % input_w) as u16;
+        let screen_row = (cursor_visual_row - scroll) as u16;
         let x = chunks[1].x + visual_col;
-        let y = chunks[1].y + visual_row;
+        let y = chunks[1].y + screen_row;
         if x < chunks[1].x + chunks[1].width && y < chunks[1].y + chunks[1].height {
             frame.set_cursor_position((x, y));
         }
