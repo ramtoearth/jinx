@@ -21,11 +21,6 @@ dependencies = [
 jinx-agent = "agent.main:main"
 
 [project.optional-dependencies]
-gcal = [
-    "google-api-python-client>=2.100",
-    "google-auth-oauthlib>=1.2",
-    "google-auth>=2.20",
-]
 dev = [
     "hypothesis",
     "pytest",
@@ -34,7 +29,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["agent", "gcal_sync"]
+packages = ["agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["agent/tests"]

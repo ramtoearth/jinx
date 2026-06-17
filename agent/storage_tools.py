@@ -423,17 +423,6 @@ def export_sqlite(output_path: str) -> str:
     return result["written_path"]
 
 
-@tool
-def sync_google() -> str:
-    """Synchronize with Google Calendar and Google Tasks.
-
-    Pushes local changes to Google and pulls remote changes into jinx.
-    Returns a status message indicating what was synced.
-    """
-    result = _send("storage.sync_google")
-    return result.get("status", "Sync completed.")
-
-
 # ---------------------------------------------------------------------------
 # Notes
 # ---------------------------------------------------------------------------

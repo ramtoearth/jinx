@@ -49,18 +49,6 @@ pub struct RemoteConfig {
     pub llamaapi_model: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct GoogleCalendarConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_calendar_id")]
-    pub calendar_id: String,
-}
-
-fn default_calendar_id() -> String {
-    "primary".to_string()
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_language")]
@@ -68,8 +56,6 @@ pub struct Config {
     pub provider: Provider,
     pub local: LocalConfig,
     pub remote: RemoteConfig,
-    #[serde(default)]
-    pub google_calendar: GoogleCalendarConfig,
     #[serde(default)]
     pub last_export_dir: Option<String>,
 }
@@ -99,7 +85,6 @@ impl Default for Config {
                 gemini_model: "gemini-2.5-flash-lite".to_string(),
                 llamaapi_model: "Llama-4-Maverick-17B-128E-Instruct-FP8".to_string(),
             },
-            google_calendar: GoogleCalendarConfig::default(),
             last_export_dir: None,
         }
     }
@@ -113,10 +98,6 @@ pub fn config_path() -> PathBuf {
     directories::ProjectDirs::from("", "", "jinx")
         .map(|dirs| dirs.config_dir().join("config.toml"))
         .unwrap_or_else(|| PathBuf::from(".jinx/config.toml"))
-}
-
-pub fn google_token_path() -> PathBuf {
-    config_path().with_file_name("google_token.json")
 }
 
 // ---------------------------------------------------------------------------
@@ -154,10 +135,6 @@ llamaapi_model = "Llama-4-Maverick-17B-128E-Instruct-FP8"
 # API keys are read from environment variables:
 #   OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, LLAMA_API_KEY
 #   Amazon Bedrock uses AWS credentials (aws configure)
-
-# [google_calendar]
-# enabled = false
-# calendar_id = "primary"
 "#;
 
 /// Persist `cfg` back to `config_path()`, overwriting the file.

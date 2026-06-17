@@ -78,13 +78,6 @@ const AGENT_LOCALE:    &str = include_str!("../../agent/locale.py");
 const AGENT_LOCALE_EN: &str = include_str!("../../agent/locales/en.toml");
 const AGENT_LOCALE_ES: &str = include_str!("../../agent/locales/es.toml");
 
-const GCAL_INIT:        &str = include_str!("../../gcal_sync/__init__.py");
-const GCAL_MAIN:        &str = include_str!("../../gcal_sync/main.py");
-const GCAL_OAUTH:       &str = include_str!("../../gcal_sync/oauth.py");
-const GCAL_SYNC:        &str = include_str!("../../gcal_sync/sync.py");
-const GCAL_PULL:        &str = include_str!("../../gcal_sync/pull.py");
-const GCAL_DB:          &str = include_str!("../../gcal_sync/db.py");
-const GCAL_CREDENTIALS: &str = include_str!("../../gcal_sync/credentials.json");
 
 /// Extract the embedded agent files to the OS data directory and return the
 /// project root path (the directory that contains `pyproject.toml`).
@@ -123,15 +116,6 @@ fn extract_agent() -> std::path::PathBuf {
     write_if_changed(&locale_dir.join("en.toml"), AGENT_LOCALE_EN);
     write_if_changed(&locale_dir.join("es.toml"), AGENT_LOCALE_ES);
 
-    let gcal_dir = data_dir.join("gcal_sync");
-    let _ = std::fs::create_dir_all(&gcal_dir);
-    write_if_changed(&gcal_dir.join("__init__.py"),       GCAL_INIT);
-    write_if_changed(&gcal_dir.join("main.py"),           GCAL_MAIN);
-    write_if_changed(&gcal_dir.join("oauth.py"),          GCAL_OAUTH);
-    write_if_changed(&gcal_dir.join("sync.py"),           GCAL_SYNC);
-    write_if_changed(&gcal_dir.join("pull.py"),           GCAL_PULL);
-    write_if_changed(&gcal_dir.join("db.py"),             GCAL_DB);
-    write_if_changed(&gcal_dir.join("credentials.json"),  GCAL_CREDENTIALS);
 
     data_dir
 }
@@ -140,25 +124,6 @@ fn extract_agent() -> std::path::PathBuf {
 // Google Calendar sync status
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default)]
-enum SyncStatus {
-    #[default]
-    Disabled,
-    Idle,
-    Syncing,
-    Error(String),
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct SyncStatusMsg {
-    state: String,
-    #[serde(default)]
-    message: Option<String>,
-}
-
-fn gcal_sync_log_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("jinx_gcal_sync.log")
-}
 
 // ---------------------------------------------------------------------------
 // Chat message
@@ -275,7 +240,7 @@ impl Default for GroupFormState {
 
 #[derive(Default, Clone)]
 struct SettingsFormState {
-    field: usize,              // 0=language, 1=provider, 2=model|backend, 3=host|model, 4=gcal
+    field: usize,              // 0=language, 1=provider, 2=model|backend, 3=host|model
     language_idx: usize,       // 0=English, 1=Español
     provider_idx: usize,       // 0=Local, 1=Remote
     backend_idx: usize,        // 0=Bedrock, 1=OpenAI, 2=Anthropic, 3=Gemini, 4=LlamaAPI
@@ -286,7 +251,6 @@ struct SettingsFormState {
     anthropic_model_input: TextEditor,
     gemini_model_input: TextEditor,
     llamaapi_model_input: TextEditor,
-    gcal_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -862,11 +826,6 @@ struct RuntimeState {
     agent_rx: Option<mpsc::Receiver<Envelope>>,
     pending_request: Option<(Uuid, Instant)>,
     // Google Calendar sync daemon
-    sync_child: Option<Child>,
-    sync_stdin: Option<ChildStdin>,
-    sync_rx: Option<mpsc::Receiver<SyncStatusMsg>>,
-    sync_status: SyncStatus,
-    oauth_rx: Option<mpsc::Receiver<String>>,
     // Modal form state
     task_form: TaskFormState,
     event_form: EventFormState,
@@ -947,11 +906,6 @@ fn run_app(
         agent_stdin: None,
         agent_rx: None,
         pending_request: None,
-        sync_child: None,
-        sync_stdin: None,
-        sync_rx: None,
-        sync_status: SyncStatus::Disabled,
-        oauth_rx: None,
         task_form: TaskFormState::default(),
         event_form: EventFormState::default(),
         group_form: GroupFormState::default(),
@@ -990,7 +944,6 @@ fn run_app(
 
     // Spawn agent
     spawn_agent(&mut state);
-    spawn_sync_daemon(&mut state);
 
     let tick = Duration::from_millis(250);
     let timeout_dur = Duration::from_secs(30);
@@ -1002,8 +955,6 @@ fn run_app(
 
         // --- Drain agent output every iteration (non-blocking) ------------
         read_agent_output(&mut state);
-        read_sync_output(&mut state);
-        read_oauth_result(&mut state);
 
         // --- Event polling ------------------------------------------------
         let elapsed = last_tick.elapsed();
@@ -1016,7 +967,6 @@ fn run_app(
                     if key.code == KeyCode::Char('q')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
-                        shutdown_sync_daemon(&mut state);
                         send_shutdown(&mut state);
                         break;
                     }
@@ -1497,7 +1447,6 @@ fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::event::KeyE
                         } else {
                             state.locale.status.task_pending.clone()
                         };
-                        notify_sync_task_changed(state, task_id);
                     }
                     Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
                 }
@@ -1672,7 +1621,6 @@ fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEve
                             } else {
                                 state.locale.status.task_pending.clone()
                             };
-                            notify_sync_task_changed(state, task_id);
                         }
                         Err(e) => state.app.status_bar = format!("Error: {}", e.message()),
                     }
@@ -2088,7 +2036,6 @@ fn open_settings_modal(state: &mut RuntimeState) {
         anthropic_model_input: TextEditor::from_string(&cfg.remote.anthropic_model),
         gemini_model_input: TextEditor::from_string(&cfg.remote.gemini_model),
         llamaapi_model_input: TextEditor::from_string(&cfg.remote.llamaapi_model),
-        gcal_enabled: cfg.google_calendar.enabled,
         field: 0,
     };
     state.app.modal = Some(Modal::Settings);
@@ -2160,9 +2107,6 @@ fn handle_settings_form_key(state: &mut RuntimeState, key: crossterm::event::Key
                 *idx = (*idx + N_BACKENDS - 1) % N_BACKENDS;
             }
         }
-        KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if state.settings_form.field == 4 => {
-            state.settings_form.gcal_enabled = !state.settings_form.gcal_enabled;
-        }
         KeyCode::Left if settings_is_text_field(state.settings_form.field, is_local) => {
             if let Some(ed) = settings_active_editor(state) { ed.move_left(); }
         }
@@ -2233,21 +2177,11 @@ fn save_settings(state: &mut RuntimeState) {
                 llamaapi_model: or_default(&form.llamaapi_model_input, &d.llamaapi_model),
             }
         },
-        google_calendar: app_config::GoogleCalendarConfig {
-            enabled: state.settings_form.gcal_enabled,
-            ..existing_cfg.google_calendar
-        },
         last_export_dir: existing_cfg.last_export_dir,
     };
     if let Err(e) = app_config::save(&cfg) {
         state.app.status_bar = state.locale.errors.config_save.replace("{error}", &e.to_string());
         return;
-    }
-
-    // If Google Calendar was just enabled and no token exists, run OAuth flow
-    let gcal_just_enabled = cfg.google_calendar.enabled && !existing_cfg.google_calendar.enabled;
-    if gcal_just_enabled && !app_config::google_token_path().exists() {
-        run_gcal_oauth(state);
     }
 
     state.locale = jinx::locale::load(lang);
@@ -2263,9 +2197,6 @@ fn restart_agent(state: &mut RuntimeState) {
     state.agent_rx = None;
     state.app.agent_alive = false;
     spawn_agent(state);
-    // Restart sync daemon in case config changed
-    shutdown_sync_daemon(state);
-    spawn_sync_daemon(state);
 }
 
 // ---------------------------------------------------------------------------
@@ -2279,14 +2210,12 @@ fn handle_modal_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         Some(Modal::NewEvent) | Some(Modal::EditEvent { .. }) => handle_event_form_key(state, key),
         Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => handle_group_form_key(state, key),
         Some(Modal::DeleteTask { id }) => handle_delete_key(state, key, |s| {
-            notify_sync_task_deleted(s, id);
             match s.storage.delete_task(id) {
                 Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.task_deleted.clone(); if s.task_cursor > 0 { s.task_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
         Some(Modal::DeleteEvent { id }) => handle_delete_key(state, key, |s| {
-            notify_sync_event_deleted(s, id);
             match s.storage.delete_event(id) {
                 Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.event_deleted.clone(); if s.calendar_cursor > 0 { s.calendar_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
@@ -2561,11 +2490,10 @@ fn save_task(state: &mut RuntimeState) {
     };
 
     match result {
-        Ok(task_id) => {
+        Ok(_task_id) => {
             state.app.modal = None;
             state.task_form = TaskFormState::default();
             state.app.status_bar = state.locale.status.task_saved.clone();
-            notify_sync_task_changed(state, task_id);
         }
         Err(e) => state.task_form.error = Some(e.message()),
     }
@@ -2616,11 +2544,10 @@ fn save_event(state: &mut RuntimeState) {
     };
 
     match result {
-        Ok(event_id) => {
+        Ok(_event_id) => {
             state.app.modal = None;
             state.event_form = EventFormState::default();
             state.app.status_bar = state.locale.status.event_saved.clone();
-            notify_sync_event_changed(state, event_id);
         }
         Err(e) => state.event_form.error = Some(e.message()),
     }
@@ -2778,313 +2705,9 @@ fn spawn_agent(state: &mut RuntimeState) {
 }
 
 // ---------------------------------------------------------------------------
-// Google Calendar sync daemon
-// ---------------------------------------------------------------------------
-
-fn spawn_sync_daemon(state: &mut RuntimeState) {
-    let cfg = app_config::load();
-    if !cfg.google_calendar.enabled {
-        state.sync_status = SyncStatus::Disabled;
-        return;
-    }
-    let token_path = app_config::google_token_path();
-    if !token_path.exists() {
-        state.sync_status = SyncStatus::Disabled;
-        return;
-    }
-
-    // Mark all existing events for push on first sync activation
-    let _ = state.storage.mark_all_push_pending();
-
-    let agent_project = extract_agent();
-    let db_path = match storage::resolve_db_path() {
-        Ok(p) => p,
-        Err(_) => {
-            state.sync_status = SyncStatus::Error("Cannot resolve DB path".to_string());
-            return;
-        }
-    };
-
-    let calendar_id = if cfg.google_calendar.calendar_id.is_empty() {
-        "primary".to_string()
-    } else {
-        cfg.google_calendar.calendar_id
-    };
-
-    let log_path = gcal_sync_log_path();
-    let sync_stderr = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map(Stdio::from)
-        .unwrap_or_else(|_| Stdio::null());
-
-    let mut sync_cmd = Command::new("uv");
-    sync_cmd.args([
-            "run",
-            "--project", agent_project.to_str().unwrap_or("."),
-            "--extra", "gcal",
-            "python", "-m", "gcal_sync.main",
-            "--db", db_path.to_str().unwrap_or(""),
-            "--calendar-id", &calendar_id,
-            "--token-path", token_path.to_str().unwrap_or(""),
-            "--timezone", &iana_timezone(),
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(sync_stderr);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt as _;
-        sync_cmd.process_group(0);
-    }
-    let child_result = sync_cmd.spawn();
-
-    let mut child = match child_result {
-        Ok(c) => c,
-        Err(_) => {
-            state.sync_status = SyncStatus::Error("Failed to start sync daemon".to_string());
-            return;
-        }
-    };
-
-    let stdin = child.stdin.take().expect("sync child stdin");
-    let child_stdout = child.stdout.take().expect("sync child stdout");
-
-    let (tx, rx) = mpsc::channel::<SyncStatusMsg>();
-    std::thread::spawn(move || {
-        use std::io::BufRead;
-        let reader = std::io::BufReader::new(child_stdout);
-        for line in reader.lines() {
-            match line {
-                Ok(line) if !line.trim().is_empty() => {
-                    if let Ok(msg) = serde_json::from_str::<SyncStatusMsg>(&line) {
-                        if tx.send(msg).is_err() {
-                            break;
-                        }
-                    }
-                }
-                Err(_) => break,
-                _ => {}
-            }
-        }
-    });
-
-    state.sync_child = Some(child);
-    state.sync_stdin = Some(stdin);
-    state.sync_rx = Some(rx);
-    state.sync_status = SyncStatus::Idle;
-}
-
-/// Spawns the OAuth subprocess in the background. The result arrives via
-/// `oauth_rx` and is handled in `read_oauth_result`.
-fn run_gcal_oauth(state: &mut RuntimeState) {
-    let agent_project = extract_agent();
-    let token_path = app_config::google_token_path();
-
-    state.app.status_bar = "Opening browser for Google Calendar authorization...".to_string();
-
-    let log_path = gcal_sync_log_path();
-    let oauth_stderr = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map(Stdio::from)
-        .unwrap_or_else(|_| Stdio::null());
-
-    let project_str = agent_project.to_str().unwrap_or(".").to_string();
-    let token_str = token_path.to_str().unwrap_or("").to_string();
-
-    let result = Command::new("uv")
-        .args([
-            "run",
-            "--project", &project_str,
-            "--extra", "gcal",
-            "python", "-m", "gcal_sync.oauth",
-            "--token-path", &token_str,
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(oauth_stderr)
-        .spawn();
-
-    let mut child = match result {
-        Ok(c) => c,
-        Err(e) => {
-            state.app.status_bar = format!("OAuth error: {e}");
-            return;
-        }
-    };
-
-    let (tx, rx) = mpsc::channel::<String>();
-    state.oauth_rx = Some(rx);
-
-    let child_stdout = child.stdout.take();
-    std::thread::spawn(move || {
-        // Read all output
-        let output = child_stdout.map(|stdout| {
-            use std::io::Read;
-            let mut buf = String::new();
-            let mut reader = std::io::BufReader::new(stdout);
-            let _ = reader.read_to_string(&mut buf);
-            buf
-        });
-
-        // Wait for process to finish
-        let status = child.wait();
-
-        let msg = match status {
-            Ok(exit) if exit.success() => {
-                if let Some(ref out) = output {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(out.trim()) {
-                        if val.get("status").and_then(|s| s.as_str()) == Some("error") {
-                            if let Some(err_msg) = val.get("message").and_then(|m| m.as_str()) {
-                                format!("error:{err_msg}")
-                            } else {
-                                "error:Unknown OAuth error".to_string()
-                            }
-                        } else {
-                            "ok".to_string()
-                        }
-                    } else {
-                        "ok".to_string()
-                    }
-                } else {
-                    "ok".to_string()
-                }
-            }
-            Ok(_) => "error:Google Calendar authorization cancelled or failed.".to_string(),
-            Err(e) => format!("error:{e}"),
-        };
-        let _ = tx.send(msg);
-    });
-}
-
-/// Kill a child process and its entire process group.
-/// On Unix, sends SIGTERM to the process group, then SIGKILL if it doesn't exit.
-/// On non-Unix, falls back to `child.kill()`.
-fn kill_process_tree(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        let pid = child.id() as i32;
-        // Send SIGTERM to the process group (negative pid = group)
-        unsafe { libc::kill(-pid, libc::SIGTERM); }
-        // Give it a moment to exit gracefully
-        std::thread::sleep(Duration::from_millis(100));
-        if let Ok(Some(_)) = child.try_wait() { return; }
-        // Force kill the group
-        unsafe { libc::kill(-pid, libc::SIGKILL); }
-        let _ = child.wait();
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-}
-
-fn shutdown_sync_daemon(state: &mut RuntimeState) {
-    if let Some(ref mut stdin) = state.sync_stdin {
-        let cmd = "{\"command\":\"stop\"}\n";
-        let _ = stdin.write_all(cmd.as_bytes());
-        let _ = stdin.flush();
-    }
-    state.sync_stdin = None;
-
-    if let Some(ref mut child) = state.sync_child {
-        let deadline = Instant::now() + Duration::from_millis(500);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if Instant::now() >= deadline => {
-                    kill_process_tree(child);
-                    break;
-                }
-                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-                Err(_) => break,
-            }
-        }
-    }
-    state.sync_child = None;
-    state.sync_rx = None;
-    state.sync_status = SyncStatus::Disabled;
-}
-
-fn notify_sync_event_changed(state: &mut RuntimeState, event_id: i64) {
-    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
-        let _ = state.storage.mark_push_pending(event_id);
-        send_sync_command(state, "{\"command\":\"sync\"}");
-    }
-}
-
-fn notify_sync_task_changed(state: &mut RuntimeState, task_id: i64) {
-    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
-        let _ = state.storage.mark_task_push_pending(task_id);
-        send_sync_command(state, "{\"command\":\"sync\"}");
-    }
-}
-
-fn notify_sync_event_deleted(state: &mut RuntimeState, event_id: i64) {
-    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
-        if let Ok(Some(gid)) = state.storage.get_google_event_id(event_id) {
-            let cmd = serde_json::json!({"command": "delete", "google_event_id": gid, "kind": "event"});
-            send_sync_command(state, &cmd.to_string());
-        }
-    }
-}
-
-fn notify_sync_task_deleted(state: &mut RuntimeState, task_id: i64) {
-    if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
-        if let Ok(Some(gid)) = state.storage.get_task_google_event_id(task_id) {
-            let cmd = serde_json::json!({"command": "delete", "google_event_id": gid, "kind": "task"});
-            send_sync_command(state, &cmd.to_string());
-        }
-    }
-}
-
-fn send_sync_command(state: &mut RuntimeState, cmd: &str) {
-    if let Some(ref mut stdin) = state.sync_stdin {
-        let line = format!("{}\n", cmd);
-        let _ = stdin.write_all(line.as_bytes());
-        let _ = stdin.flush();
-    }
-}
-
-fn read_oauth_result(state: &mut RuntimeState) {
-    if let Some(msg) = state.oauth_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-        state.oauth_rx = None;
-        if msg == "ok" {
-            state.app.status_bar = "Google Calendar connected!".to_string();
-            // Now that the token exists, start the sync daemon
-            spawn_sync_daemon(state);
-        } else if let Some(err) = msg.strip_prefix("error:") {
-            state.app.status_bar = format!("OAuth error: {err}");
-            // Disable gcal in config since auth failed
-            let mut cfg = app_config::load();
-            cfg.google_calendar.enabled = false;
-            let _ = app_config::save(&cfg);
-        }
-    }
-}
-
-fn read_sync_output(state: &mut RuntimeState) {
-    while let Some(msg) = state.sync_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-        match msg.state.as_str() {
-            "idle" | "done" => state.sync_status = SyncStatus::Idle,
-            "syncing" => state.sync_status = SyncStatus::Syncing,
-            "error" => {
-                state.sync_status = SyncStatus::Error(
-                    msg.message.unwrap_or_else(|| "Unknown error".to_string()),
-                );
-            }
-            _ => {}
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Agent communication
 // ---------------------------------------------------------------------------
+// (GCal sync daemon removed — #55)
 
 fn send_user_message(state: &mut RuntimeState, text: String) {
     if let Some(ref mut stdin) = state.agent_stdin {
@@ -3102,6 +2725,23 @@ fn send_user_message(state: &mut RuntimeState, text: String) {
             state.app.status_bar = state.locale.errors.agent_send.clone();
             state.app.agent_alive = false;
         }
+    }
+}
+
+fn kill_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        unsafe { libc::kill(-pid, libc::SIGTERM); }
+        std::thread::sleep(Duration::from_millis(100));
+        if let Ok(Some(_)) = child.try_wait() { return; }
+        unsafe { libc::kill(-pid, libc::SIGKILL); }
+        let _ = child.wait();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
@@ -3166,44 +2806,7 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
             state.pending_request = None;
             state.app.status_bar = state.locale.status.ready.clone();
         }
-        MessageType::StorageSyncGoogle => {
-            // Trigger push + pull via sync daemon
-            send_sync_command(state, "{\"command\":\"sync\"}");
-            send_sync_command(state, "{\"command\":\"pull\"}");
-
-            let response = Envelope::new(
-                Kind::Response,
-                MessageType::StorageSyncGoogle,
-                &serde_json::json!({"status": "Sync triggered."}),
-            ).unwrap().with_ref(env.id);
-            if let Some(ref mut stdin) = state.agent_stdin {
-                if let Ok(line) = serde_json::to_string(&response) {
-                    let _ = stdin.write_all(line.as_bytes());
-                    let _ = stdin.write_all(b"\n");
-                    let _ = stdin.flush();
-                }
-            }
-        }
         mt if is_storage_message_type(mt) => {
-            // For deletes, capture the google ID and kind before the storage op
-            let pre_delete_info: Option<(String, &str)> = match mt {
-                MessageType::StorageDeleteEvent => {
-                    env.payload_as::<jinx::ipc::StorageDeleteEventRequest>()
-                        .ok()
-                        .flatten()
-                        .and_then(|req| state.storage.get_google_event_id(req.id).ok().flatten())
-                        .map(|id| (id, "event"))
-                }
-                MessageType::StorageDeleteTask => {
-                    env.payload_as::<jinx::ipc::StorageDeleteTaskRequest>()
-                        .ok()
-                        .flatten()
-                        .and_then(|req| state.storage.get_task_google_event_id(req.id).ok().flatten())
-                        .map(|id| (id, "task"))
-                }
-                _ => None,
-            };
-
             let response = jinx::ipc_handler::handle_storage_request(&env, &state.storage);
 
             // Capture note results for the interactive picker (only search, not list)
@@ -3222,32 +2825,6 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
                 }
             }
 
-            // Trigger Google Calendar push for event and task mutations
-            if matches!(state.sync_status, SyncStatus::Idle | SyncStatus::Syncing) {
-                let mut needs_sync = false;
-
-                if let Some(event_id) = extract_event_id_from_response(mt, &response) {
-                    let _ = state.storage.mark_push_pending(event_id);
-                    needs_sync = true;
-                }
-                if let Some(task_id) = extract_task_id_from_response(mt, &response) {
-                    let _ = state.storage.mark_task_push_pending(task_id);
-                    needs_sync = true;
-                }
-                if let Some((google_id, kind)) = pre_delete_info {
-                    let cmd = serde_json::json!({
-                        "command": "delete",
-                        "google_event_id": google_id,
-                        "kind": kind
-                    });
-                    send_sync_command(state, &cmd.to_string());
-                    needs_sync = false; // delete already sent
-                }
-                if needs_sync {
-                    send_sync_command(state, "{\"command\":\"sync\"}");
-                }
-            }
-
             if let Some(ref mut stdin) = state.agent_stdin {
                 if let Ok(line) = serde_json::to_string(&response) {
                     let _ = stdin.write_all(line.as_bytes());
@@ -3257,35 +2834,6 @@ fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
             }
         }
         _ => {}
-    }
-}
-
-fn extract_event_id_from_response(mt: MessageType, response: &Envelope) -> Option<i64> {
-    use jinx::ipc::{StorageCreateEventResponse, StorageUpdateEventResponse};
-    match mt {
-        MessageType::StorageCreateEvent => {
-            response.payload_as::<StorageCreateEventResponse>().ok()?.map(|r| r.event.id)
-        }
-        MessageType::StorageUpdateEvent => {
-            response.payload_as::<StorageUpdateEventResponse>().ok()?.map(|r| r.event.id)
-        }
-        _ => None,
-    }
-}
-
-fn extract_task_id_from_response(mt: MessageType, response: &Envelope) -> Option<i64> {
-    use jinx::ipc::{StorageCreateTaskResponse, StorageUpdateTaskResponse, StorageCompleteTaskResponse};
-    match mt {
-        MessageType::StorageCreateTask => {
-            response.payload_as::<StorageCreateTaskResponse>().ok()?.map(|r| r.task.id)
-        }
-        MessageType::StorageUpdateTask => {
-            response.payload_as::<StorageUpdateTaskResponse>().ok()?.map(|r| r.task.id)
-        }
-        MessageType::StorageCompleteTask => {
-            response.payload_as::<StorageCompleteTaskResponse>().ok()?.map(|r| r.task.id)
-        }
-        _ => None,
     }
 }
 
@@ -3874,10 +3422,6 @@ fn render_settings_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: 
         };
         lines.push(form_line_editor(state.locale.form_labels.model.as_str(), model_editor, form.field == 3));
     }
-
-    lines.push(Line::from(""));
-    let gcal_label = if form.gcal_enabled { "← Enabled →" } else { "← Disabled →" };
-    lines.push(form_line(state.locale.form_labels.google_calendar.as_str(), gcal_label.to_string(), form.field == 4));
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -5089,19 +4633,10 @@ fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         let para = Paragraph::new(text).style(Style::default().fg(Color::Yellow));
         frame.render_widget(para, area);
     } else {
-        let sync_prefix = match &state.sync_status {
-            SyncStatus::Syncing => "↻ ",
-            SyncStatus::Idle => "☁ ",
-            SyncStatus::Error(msg) => {
-                let _ = msg; // used below
-                "⚠ "
-            }
-            SyncStatus::Disabled => "",
-        };
         let text = if state.app.status_bar.is_empty() {
-            format!("{}{}", sync_prefix, hint)
+            hint.to_string()
         } else {
-            format!("{}{}  │  {}", sync_prefix, state.app.status_bar, hint)
+            format!("{}  │  {}", state.app.status_bar, hint)
         };
         let para = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(para, area);
