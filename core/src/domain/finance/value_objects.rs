@@ -1,40 +1,43 @@
 use super::entity::{GoalHorizon, RecurringPeriod, TransactionType};
 
 #[derive(Debug, Clone)]
+pub struct NewCategory {
+    pub name: String,
+    pub tx_type: Option<TransactionType>,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewTransaction {
     pub amount: i64,
     pub tx_type: TransactionType,
-    pub category: String,
+    pub category_id: i64,
     pub description: String,
     pub date: String,
     pub recurring_id: Option<i64>,
-    pub group_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct TransactionFilter {
     pub tx_type: Option<TransactionType>,
-    pub category: Option<String>,
+    pub category_id: Option<i64>,
     pub from_date: Option<String>,
     pub to_date: Option<String>,
-    pub group_id: Option<Option<i64>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct NewRecurringRule {
     pub amount: i64,
     pub tx_type: TransactionType,
-    pub category: String,
+    pub category_id: i64,
     pub description: String,
     pub period: RecurringPeriod,
     pub day_of_month: Option<u32>,
     pub next_due: String,
-    pub group_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
 pub struct NewBudget {
-    pub category: String,
+    pub category_id: i64,
     pub monthly_limit: i64,
     pub month: String,
 }

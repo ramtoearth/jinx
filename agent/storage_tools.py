@@ -553,6 +553,17 @@ def export_note(id: int, output_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_category_id(name: str, tx_type_norm: Optional[str] = None) -> int:
+    """Resolve a category name to its ID, creating it if it doesn't exist."""
+    cats = _send("storage.finance.list_categories", {"tx_type": tx_type_norm} if tx_type_norm else None)
+    for cat in cats.get("categories", []):
+        if cat["name"].lower() == name.lower():
+            return cat["id"]
+    # Auto-create
+    result = _send("storage.finance.create_category", {"name": name, "tx_type": tx_type_norm})
+    return result["category"]["id"]
+
+
 @tool
 def register_transaction(
     amount: float,
@@ -560,16 +571,14 @@ def register_transaction(
     category: str,
     date: str,
     description: str = "",
-    group_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Register a financial transaction (income or expense).
 
     amount: the amount in currency units (e.g. 150.50 = $150.50). Stored as cents internally.
     tx_type: "ingreso" or "gasto" (income/expense)
-    category: spending category, e.g. "comida", "transporte", "servicios", "salario"
+    category: spending category name, e.g. "comida", "transporte", "servicios", "salario". Auto-created if new.
     date: ISO date, e.g. "2026-06-18"
     description: optional note about the transaction
-    group_id: optional group ID for color coding
     Returns the created transaction dict.
     """
     tx_type_norm = tx_type.lower()
@@ -580,12 +589,11 @@ def register_transaction(
     else:
         raise StorageError("VALIDATION_FAILED", f"tx_type must be ingreso/gasto, got {tx_type!r}")
     cents = int(round(amount * 100))
+    category_id = _resolve_category_id(category, tx_type_norm)
     payload: Dict[str, Any] = {
-        "amount": cents, "tx_type": tx_type_norm, "category": category,
+        "amount": cents, "tx_type": tx_type_norm, "category_id": category_id,
         "description": description, "date": date,
     }
-    if group_id is not None:
-        payload["group_id"] = group_id
     result = _send("storage.finance.create_transaction", payload)
     return result["transaction"]
 
@@ -600,7 +608,7 @@ def list_transactions(
     """List financial transactions, optionally filtered.
 
     tx_type: "ingreso" or "gasto" to filter by type
-    category: filter by category name
+    category: filter by category name (resolved to ID)
     from_date: ISO date, e.g. "2026-06-01"
     to_date: ISO date, e.g. "2026-06-30"
     Returns a list of transaction dicts with amounts in cents.
@@ -609,7 +617,8 @@ def list_transactions(
     if tx_type is not None:
         payload["tx_type"] = tx_type.lower()
     if category is not None:
-        payload["category"] = category
+        category_id = _resolve_category_id(category)
+        payload["category_id"] = category_id
     if from_date is not None:
         payload["from_date"] = from_date
     if to_date is not None:
@@ -654,13 +663,12 @@ def create_recurring_rule(
     next_due: str,
     description: str = "",
     day_of_month: Optional[int] = None,
-    group_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Create a recurring transaction rule (auto-generates transactions each period).
 
     amount: amount in currency units (e.g. 5000.00)
     tx_type: "ingreso" or "gasto"
-    category: e.g. "salario", "renta", "netflix"
+    category: category name, e.g. "salario", "renta", "netflix". Auto-created if new.
     period: "weekly", "biweekly", or "monthly"
     next_due: next date to generate, e.g. "2026-07-01"
     description: optional note
@@ -669,14 +677,13 @@ def create_recurring_rule(
     """
     tx_type_norm = "ingreso" if tx_type.lower() in ("income", "ingreso") else "gasto"
     cents = int(round(amount * 100))
+    category_id = _resolve_category_id(category, tx_type_norm)
     payload: Dict[str, Any] = {
-        "amount": cents, "tx_type": tx_type_norm, "category": category,
+        "amount": cents, "tx_type": tx_type_norm, "category_id": category_id,
         "description": description, "period": period.lower(), "next_due": next_due,
     }
     if day_of_month is not None:
         payload["day_of_month"] = day_of_month
-    if group_id is not None:
-        payload["group_id"] = group_id
     result = _send("storage.finance.create_recurring_rule", payload)
     return result["rule"]
 
@@ -835,3 +842,35 @@ def list_goals() -> List[Dict[str, Any]]:
     """
     result = _send("storage.finance.list_goals")
     return result.get("goals", [])
+
+
+# ---------------------------------------------------------------------------
+# Finance — Categories
+# ---------------------------------------------------------------------------
+
+
+@tool
+def list_finance_categories(tx_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List available finance categories.
+
+    tx_type: optional filter — "ingreso" or "gasto". Omit for all categories.
+    Returns list of {id, name, tx_type} dicts.
+    """
+    payload = {"tx_type": tx_type} if tx_type else None
+    result = _send("storage.finance.list_categories", payload)
+    return result.get("categories", [])
+
+
+@tool
+def create_finance_category(name: str, tx_type: Optional[str] = None) -> Dict[str, Any]:
+    """Create a new finance category.
+
+    name: category name, e.g. "comida", "salario"
+    tx_type: "ingreso", "gasto", or omit for both
+    Returns the created category dict.
+    """
+    payload: Dict[str, Any] = {"name": name}
+    if tx_type is not None:
+        payload["tx_type"] = tx_type.lower()
+    result = _send("storage.finance.create_category", payload)
+    return result["category"]

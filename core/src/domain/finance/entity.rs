@@ -88,15 +88,21 @@ impl std::str::FromStr for GoalHorizon {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinCategory {
+    pub id: i64,
+    pub name: String,
+    pub tx_type: Option<TransactionType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transaction {
     pub id: i64,
     pub amount: i64,
     pub tx_type: TransactionType,
-    pub category: String,
+    pub category_id: i64,
     pub description: String,
     pub date: String,
     pub recurring_id: Option<i64>,
-    pub group_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,19 +110,18 @@ pub struct RecurringRule {
     pub id: i64,
     pub amount: i64,
     pub tx_type: TransactionType,
-    pub category: String,
+    pub category_id: i64,
     pub description: String,
     pub period: RecurringPeriod,
     pub day_of_month: Option<u32>,
     pub next_due: String,
     pub active: bool,
-    pub group_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Budget {
     pub id: i64,
-    pub category: String,
+    pub category_id: i64,
     pub monthly_limit: i64,
     pub month: String,
 }

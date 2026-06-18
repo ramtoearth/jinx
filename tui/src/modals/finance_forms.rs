@@ -5,7 +5,7 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, Paragraph},
 };
-use jinx_core::{GoalHorizon, NewBudget, NewDebt, NewGoal, NewTransaction, TransactionType};
+use jinx_core::{GoalHorizon, NewBudget, NewCategory, NewDebt, NewGoal, NewTransaction, TransactionType};
 
 use crate::state::*;
 
@@ -15,11 +15,25 @@ const GOAL_FIELDS: usize = 5;
 const BUDGET_FIELDS: usize = 2;
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn refresh_categories(state: &mut RuntimeState) {
+    let tx_type = if state.transaction_form.tx_type_idx == 0 {
+        Some(TransactionType::Gasto)
+    } else {
+        Some(TransactionType::Ingreso)
+    };
+    state.finance_categories = state.services.finance.list_categories(tx_type).unwrap_or_default();
+}
+
+// ---------------------------------------------------------------------------
 // Open helpers
 // ---------------------------------------------------------------------------
 
 pub(crate) fn open_transaction_modal(state: &mut RuntimeState) {
     state.transaction_form = TransactionFormState::default();
+    refresh_categories(state);
     state.app.modal = Some(jinx::app::Modal::NewTransaction);
 }
 
@@ -35,15 +49,46 @@ pub(crate) fn open_goal_modal(state: &mut RuntimeState) {
 
 pub(crate) fn open_budget_modal(state: &mut RuntimeState) {
     state.budget_form = BudgetFormState::default();
+    state.finance_categories = state.services.finance.list_categories(Some(TransactionType::Gasto)).unwrap_or_default();
     state.app.modal = Some(jinx::app::Modal::EditBudget);
 }
 
 // ---------------------------------------------------------------------------
-// Key handlers
+// Transaction form
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_transaction_form_key(state: &mut RuntimeState, key: KeyEvent) {
-    // Date field uses DateTimeInput
+    // Adding new category mode
+    if state.transaction_form.category_adding {
+        match key.code {
+            KeyCode::Esc => { state.transaction_form.category_adding = false; }
+            KeyCode::Enter => {
+                let name = state.transaction_form.category_new_name.trim().to_string();
+                if !name.is_empty() {
+                    let tx_type = if state.transaction_form.tx_type_idx == 0 {
+                        Some(TransactionType::Gasto)
+                    } else {
+                        Some(TransactionType::Ingreso)
+                    };
+                    if let Ok(cat) = state.services.finance.create_category(NewCategory { name, tx_type }) {
+                        refresh_categories(state);
+                        // Select the new one
+                        if let Some(pos) = state.finance_categories.iter().position(|c| c.id == cat.id) {
+                            state.transaction_form.category_idx = pos;
+                        }
+                    }
+                }
+                state.transaction_form.category_adding = false;
+                state.transaction_form.category_new_name.clear();
+            }
+            KeyCode::Char(c) => { state.transaction_form.category_new_name.push(c); }
+            KeyCode::Backspace => { state.transaction_form.category_new_name.pop(); }
+            _ => {}
+        }
+        return;
+    }
+
+    // Date field
     if state.transaction_form.field == 4 {
         match state.transaction_form.date.handle_key(key.code) {
             DateInputResult::Consumed => return,
@@ -59,17 +104,50 @@ pub(crate) fn handle_transaction_form_key(state: &mut RuntimeState, key: KeyEven
         KeyCode::Enter => save_transaction(state),
         KeyCode::Tab | KeyCode::Down => {
             state.transaction_form.field = (state.transaction_form.field + 1) % TX_FIELDS;
+            if state.transaction_form.field == 2 { refresh_categories(state); }
         }
         KeyCode::BackTab | KeyCode::Up => {
             state.transaction_form.field = (state.transaction_form.field + TX_FIELDS - 1) % TX_FIELDS;
+            if state.transaction_form.field == 2 { refresh_categories(state); }
         }
+        // Type selector
         KeyCode::Left | KeyCode::Right if state.transaction_form.field == 1 => {
             state.transaction_form.tx_type_idx = 1 - state.transaction_form.tx_type_idx;
+            refresh_categories(state);
+            state.transaction_form.category_idx = 0;
         }
+        // Category selector
+        KeyCode::Left if state.transaction_form.field == 2 => {
+            let len = state.finance_categories.len();
+            if len > 0 {
+                state.transaction_form.category_idx = (state.transaction_form.category_idx + len - 1) % len;
+            }
+        }
+        KeyCode::Right if state.transaction_form.field == 2 => {
+            let len = state.finance_categories.len();
+            if len > 0 {
+                state.transaction_form.category_idx = (state.transaction_form.category_idx + 1) % len;
+            }
+        }
+        KeyCode::Char('a') if state.transaction_form.field == 2 => {
+            state.transaction_form.category_adding = true;
+            state.transaction_form.category_new_name.clear();
+        }
+        KeyCode::Char('d') if state.transaction_form.field == 2 => {
+            if let Some(cat) = state.finance_categories.get(state.transaction_form.category_idx) {
+                let _ = state.services.finance.delete_category(cat.id);
+                refresh_categories(state);
+                if state.transaction_form.category_idx > 0 && state.finance_categories.is_empty() {
+                    state.transaction_form.category_idx = 0;
+                } else if state.transaction_form.category_idx >= state.finance_categories.len() && !state.finance_categories.is_empty() {
+                    state.transaction_form.category_idx = state.finance_categories.len() - 1;
+                }
+            }
+        }
+        // Text fields
         KeyCode::Char(c) => {
             match state.transaction_form.field {
                 0 => state.transaction_form.amount.push(c),
-                2 => state.transaction_form.category.push(c),
                 3 => state.transaction_form.description.push(c),
                 _ => {}
             }
@@ -77,7 +155,6 @@ pub(crate) fn handle_transaction_form_key(state: &mut RuntimeState, key: KeyEven
         KeyCode::Backspace => {
             match state.transaction_form.field {
                 0 => { state.transaction_form.amount.pop(); }
-                2 => { state.transaction_form.category.pop(); }
                 3 => { state.transaction_form.description.pop(); }
                 _ => {}
             }
@@ -85,6 +162,10 @@ pub(crate) fn handle_transaction_form_key(state: &mut RuntimeState, key: KeyEven
         _ => {}
     }
 }
+
+// ---------------------------------------------------------------------------
+// Debt form
+// ---------------------------------------------------------------------------
 
 pub(crate) fn handle_debt_form_key(state: &mut RuntimeState, key: KeyEvent) {
     match key.code {
@@ -120,8 +201,11 @@ pub(crate) fn handle_debt_form_key(state: &mut RuntimeState, key: KeyEvent) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Goal form
+// ---------------------------------------------------------------------------
+
 pub(crate) fn handle_goal_form_key(state: &mut RuntimeState, key: KeyEvent) {
-    // Deadline field uses DateTimeInput
     if state.goal_form.field == 3 {
         match state.goal_form.deadline.handle_key(key.code) {
             DateInputResult::Consumed => return,
@@ -164,6 +248,10 @@ pub(crate) fn handle_goal_form_key(state: &mut RuntimeState, key: KeyEvent) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Budget form
+// ---------------------------------------------------------------------------
+
 pub(crate) fn handle_budget_form_key(state: &mut RuntimeState, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => { state.app.modal = None; }
@@ -174,19 +262,19 @@ pub(crate) fn handle_budget_form_key(state: &mut RuntimeState, key: KeyEvent) {
         KeyCode::BackTab | KeyCode::Up => {
             state.budget_form.field = (state.budget_form.field + BUDGET_FIELDS - 1) % BUDGET_FIELDS;
         }
-        KeyCode::Char(c) => {
-            match state.budget_form.field {
-                0 => state.budget_form.category.push(c),
-                1 => state.budget_form.monthly_limit.push(c),
-                _ => {}
-            }
+        KeyCode::Left if state.budget_form.field == 0 => {
+            let len = state.finance_categories.len();
+            if len > 0 { state.budget_form.category_idx = (state.budget_form.category_idx + len - 1) % len; }
         }
-        KeyCode::Backspace => {
-            match state.budget_form.field {
-                0 => { state.budget_form.category.pop(); }
-                1 => { state.budget_form.monthly_limit.pop(); }
-                _ => {}
-            }
+        KeyCode::Right if state.budget_form.field == 0 => {
+            let len = state.finance_categories.len();
+            if len > 0 { state.budget_form.category_idx = (state.budget_form.category_idx + 1) % len; }
+        }
+        KeyCode::Char(c) if state.budget_form.field == 1 => {
+            state.budget_form.monthly_limit.push(c);
+        }
+        KeyCode::Backspace if state.budget_form.field == 1 => {
+            state.budget_form.monthly_limit.pop();
         }
         _ => {}
     }
@@ -202,19 +290,18 @@ fn save_transaction(state: &mut RuntimeState) {
         Some(v) => v,
         None => { state.transaction_form.error = Some("Monto inválido".into()); return; }
     };
-    if form.category.trim().is_empty() {
-        state.transaction_form.error = Some("Categoría requerida".into());
-        return;
-    }
+    let category_id = match state.finance_categories.get(form.category_idx) {
+        Some(cat) => cat.id,
+        None => { state.transaction_form.error = Some("Selecciona una categoría".into()); return; }
+    };
     let tx_type = if form.tx_type_idx == 0 { TransactionType::Gasto } else { TransactionType::Ingreso };
     let date = form.date.to_date_string().unwrap_or_else(|| {
         chrono::Local::now().format("%Y-%m-%d").to_string()
     });
 
     match state.services.finance.create_transaction(NewTransaction {
-        amount: amount_cents, tx_type, category: form.category.trim().to_string(),
-        description: form.description.clone(), date,
-        recurring_id: None, group_id: None,
+        amount: amount_cents, tx_type, category_id,
+        description: form.description.clone(), date, recurring_id: None,
     }) {
         Ok(_) => {
             state.app.modal = None;
@@ -244,9 +331,7 @@ fn save_debt(state: &mut RuntimeState) {
             Err(_) => { state.debt_form.error = Some("Tasa inválida".into()); return; }
         }
     };
-    let due_day: Option<u32> = if form.due_day.is_empty() { None } else {
-        form.due_day.parse().ok()
-    };
+    let due_day: Option<u32> = if form.due_day.is_empty() { None } else { form.due_day.parse().ok() };
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
     match state.services.finance.create_debt(NewDebt {
@@ -254,10 +339,7 @@ fn save_debt(state: &mut RuntimeState) {
         remaining_amount: total, interest_rate: rate,
         monthly_payment: payment, due_day, start_date: today,
     }) {
-        Ok(_) => {
-            state.app.modal = None;
-            state.app.status_bar = "Deuda registrada".into();
-        }
+        Ok(_) => { state.app.modal = None; state.app.status_bar = "Deuda registrada".into(); }
         Err(e) => { state.debt_form.error = Some(e.message()); }
     }
 }
@@ -285,10 +367,7 @@ fn save_goal(state: &mut RuntimeState) {
         name: form.name.trim().to_string(), target_amount: target,
         current_amount: current, deadline, horizon: horizons[form.horizon_idx],
     }) {
-        Ok(_) => {
-            state.app.modal = None;
-            state.app.status_bar = "Meta creada".into();
-        }
+        Ok(_) => { state.app.modal = None; state.app.status_bar = "Meta creada".into(); }
         Err(e) => { state.goal_form.error = Some(e.message()); }
     }
 }
@@ -299,20 +378,15 @@ fn save_budget(state: &mut RuntimeState) {
         Some(v) => v,
         None => { state.budget_form.error = Some("Límite inválido".into()); return; }
     };
-    if form.category.trim().is_empty() {
-        state.budget_form.error = Some("Categoría requerida".into());
-        return;
-    }
+    let category_id = match state.finance_categories.get(form.category_idx) {
+        Some(cat) => cat.id,
+        None => { state.budget_form.error = Some("Selecciona una categoría".into()); return; }
+    };
 
     match state.services.finance.set_budget(NewBudget {
-        category: form.category.trim().to_string(),
-        monthly_limit: limit,
-        month: state.finance_month.clone(),
+        category_id, monthly_limit: limit, month: state.finance_month.clone(),
     }) {
-        Ok(_) => {
-            state.app.modal = None;
-            state.app.status_bar = "Presupuesto guardado".into();
-        }
+        Ok(_) => { state.app.modal = None; state.app.status_bar = "Presupuesto guardado".into(); }
         Err(e) => { state.budget_form.error = Some(e.message()); }
     }
 }
@@ -343,10 +417,20 @@ fn parse_money(s: &str) -> Option<i64> {
 pub(crate) fn render_transaction_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let form = &state.transaction_form;
     let types = ["← Gasto →", "← Ingreso →"];
+
+    let cat_display = if form.category_adding {
+        format!("Nuevo: {}▌", form.category_new_name)
+    } else if state.finance_categories.is_empty() {
+        "(sin categorías — a:agregar)".to_string()
+    } else {
+        let name = &state.finance_categories[form.category_idx.min(state.finance_categories.len().saturating_sub(1))].name;
+        format!("← {} →  (a:agregar  d:eliminar)", name)
+    };
+
     let mut lines = vec![
         super::form_line("Monto", form.amount.clone(), form.field == 0),
         super::form_line("Tipo", types[form.tx_type_idx].to_string(), form.field == 1),
-        super::form_line("Categoría", form.category.clone(), form.field == 2),
+        super::form_line("Categoría", cat_display, form.field == 2),
         super::form_line("Descripción", form.description.clone(), form.field == 3),
         date_input_line(
             "Fecha", &form.date, form.field == 4,
@@ -398,8 +482,14 @@ pub(crate) fn render_goal_form(frame: &mut ratatui::Frame, state: &RuntimeState,
 
 pub(crate) fn render_budget_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let form = &state.budget_form;
+    let cat_display = if state.finance_categories.is_empty() {
+        "(sin categorías)".to_string()
+    } else {
+        let name = &state.finance_categories[form.category_idx.min(state.finance_categories.len().saturating_sub(1))].name;
+        format!("← {} →", name)
+    };
     let mut lines = vec![
-        super::form_line("Categoría", form.category.clone(), form.field == 0),
+        super::form_line("Categoría", cat_display, form.field == 0),
         super::form_line("Límite mensual", form.monthly_limit.clone(), form.field == 1),
     ];
     if let Some(err) = &form.error {

@@ -3,6 +3,11 @@ use super::entity::*;
 use super::value_objects::*;
 
 pub trait FinanceRepository: Send + Sync {
+    // Categories
+    fn list_categories(&self, tx_type: Option<TransactionType>) -> Result<Vec<FinCategory>, DomainError>;
+    fn create_category(&self, input: NewCategory) -> Result<FinCategory, DomainError>;
+    fn delete_category(&self, id: i64) -> Result<(), DomainError>;
+
     // Transactions
     fn list_transactions(&self, filter: TransactionFilter) -> Result<Vec<Transaction>, DomainError>;
     fn create_transaction(&self, input: NewTransaction) -> Result<Transaction, DomainError>;

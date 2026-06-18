@@ -4,9 +4,9 @@
 //! This module runs in the IPC reader thread (see `main.rs` startup).
 
 use jinx_core::{
-    AppServices, DebtPatch, DomainError, EventPatch, GoalPatch, HexColor, NewBudget, NewDebt,
-    NewEvent, NewGoal, NewGroup, NewNote, NewRecurringRule, NewTask, NewTransaction, NotePatch,
-    Priority, TaskFilter, TaskPatch, TaskStatus, TransactionFilter,
+    AppServices, DebtPatch, DomainError, EventPatch, GoalPatch, HexColor, NewBudget, NewCategory,
+    NewDebt, NewEvent, NewGoal, NewGroup, NewNote, NewRecurringRule, NewTask, NewTransaction,
+    NotePatch, Priority, TaskFilter, TaskPatch, TaskStatus, TransactionFilter,
 };
 
 use crate::ipc::{
@@ -90,26 +90,32 @@ fn domain_err_to_ipc(e: DomainError) -> IpcError {
     }
 }
 
+fn category_to_dto(c: jinx_core::FinCategory) -> crate::ipc::FinanceCategoryDto {
+    crate::ipc::FinanceCategoryDto {
+        id: c.id, name: c.name, tx_type: c.tx_type.map(|t| t.as_str().to_string()),
+    }
+}
+
 fn tx_to_dto(t: jinx_core::Transaction) -> crate::ipc::FinanceTransactionDto {
     crate::ipc::FinanceTransactionDto {
         id: t.id, amount: t.amount, tx_type: t.tx_type.as_str().to_string(),
-        category: t.category, description: t.description, date: t.date,
-        recurring_id: t.recurring_id, group_id: t.group_id,
+        category_id: t.category_id, description: t.description, date: t.date,
+        recurring_id: t.recurring_id,
     }
 }
 
 fn recurring_to_dto(r: jinx_core::RecurringRule) -> crate::ipc::FinanceRecurringRuleDto {
     crate::ipc::FinanceRecurringRuleDto {
         id: r.id, amount: r.amount, tx_type: r.tx_type.as_str().to_string(),
-        category: r.category, description: r.description,
+        category_id: r.category_id, description: r.description,
         period: r.period.as_str().to_string(), day_of_month: r.day_of_month,
-        next_due: r.next_due, active: r.active, group_id: r.group_id,
+        next_due: r.next_due, active: r.active,
     }
 }
 
 fn budget_to_dto(b: jinx_core::Budget) -> crate::ipc::FinanceBudgetDto {
     crate::ipc::FinanceBudgetDto {
-        id: b.id, category: b.category, monthly_limit: b.monthly_limit, month: b.month,
+        id: b.id, category_id: b.category_id, monthly_limit: b.monthly_limit, month: b.month,
     }
 }
 
@@ -584,17 +590,66 @@ pub fn handle_storage_request(
         }
 
         // ------------------------------------------------------------------
-        // Finance
+        // Finance — Categories
+        // ------------------------------------------------------------------
+        MessageType::FinanceListCategories => {
+            let req: crate::ipc::FinanceListCategoriesRequest = envelope
+                .payload_as().unwrap_or(None).unwrap_or(None)
+                .unwrap_or(crate::ipc::FinanceListCategoriesRequest { tx_type: None });
+            let tx_type = req.tx_type.as_deref().and_then(|s| s.parse().ok());
+            match services.finance.list_categories(tx_type) {
+                Ok(cats) => response_base.clone()
+                    .with_payload(&crate::ipc::FinanceListCategoriesResponse {
+                        categories: cats.into_iter().map(category_to_dto).collect(),
+                    }).unwrap_or(response_base),
+                Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+            }
+        }
+
+        MessageType::FinanceCreateCategory => {
+            let req: Option<crate::ipc::FinanceCreateCategoryRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => {
+                    let tx_type = r.tx_type.as_deref().and_then(|s| s.parse().ok());
+                    match services.finance.create_category(jinx_core::NewCategory {
+                        name: r.name, tx_type,
+                    }) {
+                        Ok(c) => response_base.clone()
+                            .with_payload(&crate::ipc::FinanceCreateCategoryResponse { category: category_to_dto(c) })
+                            .unwrap_or(response_base),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                    }
+                }
+            }
+        }
+
+        MessageType::FinanceDeleteCategory => {
+            let req: Option<crate::ipc::FinanceDeleteCategoryRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.delete_category(r.id) {
+                    Ok(_) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceDeleteCategoryResponse {})
+                        .unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Finance — Transactions
         // ------------------------------------------------------------------
         MessageType::FinanceListTransactions => {
             let req: crate::ipc::FinanceListTransactionsRequest = envelope
                 .payload_as().unwrap_or(None).unwrap_or(None).unwrap_or_default();
             let filter = TransactionFilter {
                 tx_type: req.tx_type.as_deref().and_then(|s| s.parse().ok()),
-                category: req.category,
+                category_id: req.category_id,
                 from_date: req.from_date,
                 to_date: req.to_date,
-                group_id: None,
             };
             match services.finance.list_transactions(filter) {
                 Ok(txs) => response_base.clone()
@@ -616,9 +671,9 @@ pub fn handle_storage_request(
                         Err(_) => return response_base.with_error(IpcError::new("VALIDATION_FAILED", "invalid tx_type")),
                     };
                     match services.finance.create_transaction(NewTransaction {
-                        amount: r.amount, tx_type, category: r.category,
+                        amount: r.amount, tx_type, category_id: r.category_id,
                         description: r.description, date: r.date,
-                        recurring_id: None, group_id: r.group_id,
+                        recurring_id: None,
                     }) {
                         Ok(t) => response_base.clone()
                             .with_payload(&crate::ipc::FinanceCreateTransactionResponse { transaction: tx_to_dto(t) })
@@ -685,9 +740,9 @@ pub fn handle_storage_request(
                         Err(_) => return response_base.with_error(IpcError::new("VALIDATION_FAILED", "invalid period")),
                     };
                     match services.finance.create_recurring_rule(NewRecurringRule {
-                        amount: r.amount, tx_type, category: r.category,
+                        amount: r.amount, tx_type, category_id: r.category_id,
                         description: r.description, period, day_of_month: r.day_of_month,
-                        next_due: r.next_due, group_id: r.group_id,
+                        next_due: r.next_due,
                     }) {
                         Ok(rule) => response_base.clone()
                             .with_payload(&crate::ipc::FinanceCreateRecurringRuleResponse { rule: recurring_to_dto(rule) })
@@ -733,7 +788,7 @@ pub fn handle_storage_request(
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => match services.finance.set_budget(NewBudget {
-                    category: r.category, monthly_limit: r.monthly_limit, month: r.month,
+                    category_id: r.category_id, monthly_limit: r.monthly_limit, month: r.month,
                 }) {
                     Ok(b) => response_base.clone()
                         .with_payload(&crate::ipc::FinanceSetBudgetResponse { budget: budget_to_dto(b) })
@@ -752,7 +807,7 @@ pub fn handle_storage_request(
                     Ok(items) => response_base.clone()
                         .with_payload(&crate::ipc::FinanceBudgetStatusResponse {
                             items: items.into_iter().map(|(b, spent)| crate::ipc::FinanceBudgetStatusItem {
-                                category: b.category, monthly_limit: b.monthly_limit, spent,
+                                category_id: b.category_id, monthly_limit: b.monthly_limit, spent,
                             }).collect(),
                         }).unwrap_or(response_base),
                     Err(e) => response_base.with_error(domain_err_to_ipc(e)),
@@ -917,6 +972,9 @@ pub fn is_storage_request(mt: MessageType) -> bool {
             | MessageType::StorageUpdateNote
             | MessageType::StorageDeleteNote
             | MessageType::StorageExportNote
+            | MessageType::FinanceListCategories
+            | MessageType::FinanceCreateCategory
+            | MessageType::FinanceDeleteCategory
             | MessageType::FinanceListTransactions
             | MessageType::FinanceCreateTransaction
             | MessageType::FinanceDeleteTransaction

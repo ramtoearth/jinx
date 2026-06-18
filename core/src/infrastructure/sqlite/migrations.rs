@@ -163,6 +163,81 @@ static MIGRATIONS: &[&str] = &[
     CREATE INDEX IF NOT EXISTS idx_fin_recurring_next ON fin_recurring_rules(next_due) WHERE active = 1;
     CREATE INDEX IF NOT EXISTS idx_fin_budgets_month ON fin_budgets(month);
     "#,
+    // Migration 10: Replace free-text category with fin_categories table
+    r#"
+    CREATE TABLE IF NOT EXISTS fin_categories (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        name    TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        tx_type TEXT    CHECK (tx_type IN ('ingreso','gasto'))
+    );
+
+    -- Migrate existing category text to fin_categories
+    INSERT OR IGNORE INTO fin_categories (name)
+        SELECT DISTINCT category FROM fin_transactions WHERE category != '';
+    INSERT OR IGNORE INTO fin_categories (name)
+        SELECT DISTINCT category FROM fin_recurring_rules WHERE category != '';
+    INSERT OR IGNORE INTO fin_categories (name)
+        SELECT DISTINCT category FROM fin_budgets WHERE category != '';
+
+    -- Recreate fin_transactions with category_id, without group_id
+    CREATE TABLE fin_transactions_new (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount       INTEGER NOT NULL,
+        tx_type      TEXT    NOT NULL CHECK (tx_type IN ('ingreso','gasto')),
+        category_id  INTEGER NOT NULL,
+        description  TEXT    NOT NULL DEFAULT '',
+        date         TEXT    NOT NULL,
+        recurring_id INTEGER,
+        FOREIGN KEY (category_id) REFERENCES fin_categories(id),
+        FOREIGN KEY (recurring_id) REFERENCES fin_recurring_rules(id) ON DELETE SET NULL
+    );
+    INSERT INTO fin_transactions_new (id, amount, tx_type, category_id, description, date, recurring_id)
+        SELECT t.id, t.amount, t.tx_type, COALESCE(c.id, 1), t.description, t.date, t.recurring_id
+        FROM fin_transactions t LEFT JOIN fin_categories c ON LOWER(t.category) = LOWER(c.name);
+    DROP TABLE fin_transactions;
+    ALTER TABLE fin_transactions_new RENAME TO fin_transactions;
+
+    -- Recreate fin_recurring_rules with category_id, without group_id
+    CREATE TABLE fin_recurring_rules_new (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount       INTEGER NOT NULL,
+        tx_type      TEXT    NOT NULL CHECK (tx_type IN ('ingreso','gasto')),
+        category_id  INTEGER NOT NULL,
+        description  TEXT    NOT NULL DEFAULT '',
+        period       TEXT    NOT NULL CHECK (period IN ('weekly','biweekly','monthly')),
+        day_of_month INTEGER,
+        next_due     TEXT    NOT NULL,
+        active       INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (category_id) REFERENCES fin_categories(id)
+    );
+    INSERT INTO fin_recurring_rules_new (id, amount, tx_type, category_id, description, period, day_of_month, next_due, active)
+        SELECT r.id, r.amount, r.tx_type, COALESCE(c.id, 1), r.description, r.period, r.day_of_month, r.next_due, r.active
+        FROM fin_recurring_rules r LEFT JOIN fin_categories c ON LOWER(r.category) = LOWER(c.name);
+    DROP TABLE fin_recurring_rules;
+    ALTER TABLE fin_recurring_rules_new RENAME TO fin_recurring_rules;
+
+    -- Recreate fin_budgets with category_id
+    CREATE TABLE fin_budgets_new (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        category_id   INTEGER NOT NULL,
+        monthly_limit INTEGER NOT NULL,
+        month         TEXT    NOT NULL,
+        UNIQUE(category_id, month),
+        FOREIGN KEY (category_id) REFERENCES fin_categories(id)
+    );
+    INSERT INTO fin_budgets_new (id, category_id, monthly_limit, month)
+        SELECT b.id, COALESCE(c.id, 1), b.monthly_limit, b.month
+        FROM fin_budgets b LEFT JOIN fin_categories c ON LOWER(b.category) = LOWER(c.name);
+    DROP TABLE fin_budgets;
+    ALTER TABLE fin_budgets_new RENAME TO fin_budgets;
+
+    -- Recreate indexes
+    CREATE INDEX IF NOT EXISTS idx_fin_tx_date     ON fin_transactions(date);
+    CREATE INDEX IF NOT EXISTS idx_fin_tx_type     ON fin_transactions(tx_type);
+    CREATE INDEX IF NOT EXISTS idx_fin_tx_cat      ON fin_transactions(category_id);
+    CREATE INDEX IF NOT EXISTS idx_fin_recurring_next ON fin_recurring_rules(next_due) WHERE active = 1;
+    CREATE INDEX IF NOT EXISTS idx_fin_budgets_month ON fin_budgets(month);
+    "#,
 ];
 
 pub(crate) fn apply_migrations(conn: &Connection) -> Result<(), DomainError> {

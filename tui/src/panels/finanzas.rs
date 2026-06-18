@@ -44,6 +44,7 @@ pub(crate) fn render_finanzas(frame: &mut ratatui::Frame, state: &mut RuntimeSta
     let budget_items = state.services.finance.budget_status(month).unwrap_or_default();
     let goals = state.services.finance.list_goals().unwrap_or_default();
     let debts = state.services.finance.list_debts().unwrap_or_default();
+    let categories = state.services.finance.list_categories(None).unwrap_or_default();
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -99,8 +100,9 @@ pub(crate) fn render_finanzas(frame: &mut ratatui::Frame, state: &mut RuntimeSta
             let pct = if b.monthly_limit > 0 { (*spent as f64 / b.monthly_limit as f64 * 100.0).min(100.0) } else { 0.0 };
             let bar = progress_bar(pct, 10);
             let color = if pct > 90.0 { Color::Red } else if pct > 70.0 { Color::Yellow } else { Color::Green };
+            let cat_name = categories.iter().find(|c| c.id == b.category_id).map(|c| c.name.as_str()).unwrap_or("?");
             budget_lines.push(ListItem::new(Line::from(vec![
-                Span::raw(format!("    {:<14}", b.category)),
+                Span::raw(format!("    {:<14}", cat_name)),
                 Span::styled(bar, Style::default().fg(color)),
                 Span::raw(format!("  {} / {}", format_money(*spent), format_money(b.monthly_limit))),
             ])));

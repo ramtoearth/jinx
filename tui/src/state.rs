@@ -189,7 +189,9 @@ impl Default for FilterFormState {
 pub(crate) struct TransactionFormState {
     pub(crate) amount: String,
     pub(crate) tx_type_idx: usize, // 0=gasto, 1=ingreso
-    pub(crate) category: String,
+    pub(crate) category_idx: usize,
+    pub(crate) category_adding: bool,
+    pub(crate) category_new_name: String,
     pub(crate) description: String,
     pub(crate) date: DateTimeInput,
     pub(crate) field: usize, // 0=amount, 1=type, 2=category, 3=description, 4=date
@@ -201,7 +203,9 @@ impl Default for TransactionFormState {
         Self {
             amount: String::new(),
             tx_type_idx: 0,
-            category: String::new(),
+            category_idx: 0,
+            category_adding: false,
+            category_new_name: String::new(),
             description: String::new(),
             date: DateTimeInput::date_only_now(),
             field: 0,
@@ -248,7 +252,7 @@ impl Default for GoalFormState {
 
 #[derive(Default, Clone)]
 pub(crate) struct BudgetFormState {
-    pub(crate) category: String,
+    pub(crate) category_idx: usize,
     pub(crate) monthly_limit: String,
     pub(crate) field: usize,
     pub(crate) error: Option<String>,
@@ -803,6 +807,7 @@ pub(crate) struct RuntimeState {
     pub(crate) cmd_picker_filtered: Vec<usize>,
     // Finance panel
     pub(crate) finance_month: String,
+    pub(crate) finance_categories: Vec<jinx_core::FinCategory>,
     pub(crate) transaction_form: TransactionFormState,
     pub(crate) debt_form: DebtFormState,
     pub(crate) goal_form: GoalFormState,

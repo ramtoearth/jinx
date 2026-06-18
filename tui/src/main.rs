@@ -157,6 +157,7 @@ fn run_app(
         cmd_picker_cursor: 0,
         cmd_picker_filtered: Vec::new(),
         finance_month: current_month(),
+        finance_categories: Vec::new(),
         transaction_form: TransactionFormState::default(),
         debt_form: DebtFormState::default(),
         goal_form: GoalFormState::default(),

@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use crate::domain::{
-    Budget, Debt, DebtPatch, DomainError, Goal, GoalPatch, MonthlySummary, NewBudget, NewDebt,
-    NewGoal, NewRecurringRule, NewTransaction, RecurringRule, Transaction, TransactionFilter,
+    Budget, Debt, DebtPatch, DomainError, FinCategory, Goal, GoalPatch, MonthlySummary, NewBudget,
+    NewCategory, NewDebt, NewGoal, NewRecurringRule, NewTransaction, RecurringRule, Transaction,
+    TransactionFilter, TransactionType,
     finance::FinanceRepository,
 };
 
@@ -13,6 +14,17 @@ pub struct FinanceService {
 impl FinanceService {
     pub fn new(repo: Arc<dyn FinanceRepository>) -> Self {
         Self { repo }
+    }
+
+    // Categories
+    pub fn list_categories(&self, tx_type: Option<TransactionType>) -> Result<Vec<FinCategory>, DomainError> {
+        self.repo.list_categories(tx_type)
+    }
+    pub fn create_category(&self, input: NewCategory) -> Result<FinCategory, DomainError> {
+        self.repo.create_category(input)
+    }
+    pub fn delete_category(&self, id: i64) -> Result<(), DomainError> {
+        self.repo.delete_category(id)
     }
 
     // Transactions
@@ -50,11 +62,10 @@ impl FinanceService {
                 self.repo.create_transaction(NewTransaction {
                     amount: rule.amount,
                     tx_type: rule.tx_type,
-                    category: rule.category.clone(),
+                    category_id: rule.category_id,
                     description: rule.description.clone(),
                     date: rule.next_due.clone(),
                     recurring_id: Some(rule.id),
-                    group_id: rule.group_id,
                 })?;
                 let next = advance_date(&rule.next_due, &rule.period);
                 self.repo.advance_recurring_next_due(rule.id, &next)?;
