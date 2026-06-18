@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
-    text::{Line, Span},
+    text::Line,
     widgets::{Block, Borders, Paragraph},
 };
 use jinx_core::{GoalHorizon, NewBudget, NewDebt, NewGoal, NewTransaction, TransactionType};
@@ -19,10 +19,7 @@ const BUDGET_FIELDS: usize = 2;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn open_transaction_modal(state: &mut RuntimeState) {
-    state.transaction_form = TransactionFormState {
-        date: chrono::Local::now().format("%Y-%m-%d").to_string(),
-        ..Default::default()
-    };
+    state.transaction_form = TransactionFormState::default();
     state.app.modal = Some(jinx::app::Modal::NewTransaction);
 }
 
@@ -37,9 +34,7 @@ pub(crate) fn open_goal_modal(state: &mut RuntimeState) {
 }
 
 pub(crate) fn open_budget_modal(state: &mut RuntimeState) {
-    state.budget_form = BudgetFormState {
-        ..Default::default()
-    };
+    state.budget_form = BudgetFormState::default();
     state.app.modal = Some(jinx::app::Modal::EditBudget);
 }
 
@@ -48,6 +43,17 @@ pub(crate) fn open_budget_modal(state: &mut RuntimeState) {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_transaction_form_key(state: &mut RuntimeState, key: KeyEvent) {
+    // Date field uses DateTimeInput
+    if state.transaction_form.field == 4 {
+        match state.transaction_form.date.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => { state.transaction_form.field = 0; return; }
+            DateInputResult::PrevField => { state.transaction_form.field = 3; return; }
+            DateInputResult::Submit => { save_transaction(state); return; }
+            DateInputResult::Cancel => { state.app.modal = None; return; }
+        }
+    }
+
     match key.code {
         KeyCode::Esc => { state.app.modal = None; }
         KeyCode::Enter => save_transaction(state),
@@ -65,7 +71,6 @@ pub(crate) fn handle_transaction_form_key(state: &mut RuntimeState, key: KeyEven
                 0 => state.transaction_form.amount.push(c),
                 2 => state.transaction_form.category.push(c),
                 3 => state.transaction_form.description.push(c),
-                4 => state.transaction_form.date.push(c),
                 _ => {}
             }
         }
@@ -74,7 +79,6 @@ pub(crate) fn handle_transaction_form_key(state: &mut RuntimeState, key: KeyEven
                 0 => { state.transaction_form.amount.pop(); }
                 2 => { state.transaction_form.category.pop(); }
                 3 => { state.transaction_form.description.pop(); }
-                4 => { state.transaction_form.date.pop(); }
                 _ => {}
             }
         }
@@ -117,6 +121,17 @@ pub(crate) fn handle_debt_form_key(state: &mut RuntimeState, key: KeyEvent) {
 }
 
 pub(crate) fn handle_goal_form_key(state: &mut RuntimeState, key: KeyEvent) {
+    // Deadline field uses DateTimeInput
+    if state.goal_form.field == 3 {
+        match state.goal_form.deadline.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => { state.goal_form.field = 4; return; }
+            DateInputResult::PrevField => { state.goal_form.field = 2; return; }
+            DateInputResult::Submit => { save_goal(state); return; }
+            DateInputResult::Cancel => { state.app.modal = None; return; }
+        }
+    }
+
     match key.code {
         KeyCode::Esc => { state.app.modal = None; }
         KeyCode::Enter => save_goal(state),
@@ -134,7 +149,6 @@ pub(crate) fn handle_goal_form_key(state: &mut RuntimeState, key: KeyEvent) {
                 0 => state.goal_form.name.push(c),
                 1 => state.goal_form.target_amount.push(c),
                 2 => state.goal_form.current_amount.push(c),
-                3 => state.goal_form.deadline.push(c),
                 _ => {}
             }
         }
@@ -143,7 +157,6 @@ pub(crate) fn handle_goal_form_key(state: &mut RuntimeState, key: KeyEvent) {
                 0 => { state.goal_form.name.pop(); }
                 1 => { state.goal_form.target_amount.pop(); }
                 2 => { state.goal_form.current_amount.pop(); }
-                3 => { state.goal_form.deadline.pop(); }
                 _ => {}
             }
         }
@@ -194,11 +207,9 @@ fn save_transaction(state: &mut RuntimeState) {
         return;
     }
     let tx_type = if form.tx_type_idx == 0 { TransactionType::Gasto } else { TransactionType::Ingreso };
-    let date = if form.date.is_empty() {
+    let date = form.date.to_date_string().unwrap_or_else(|| {
         chrono::Local::now().format("%Y-%m-%d").to_string()
-    } else {
-        form.date.clone()
-    };
+    });
 
     match state.services.finance.create_transaction(NewTransaction {
         amount: amount_cents, tx_type, category: form.category.trim().to_string(),
@@ -268,7 +279,7 @@ fn save_goal(state: &mut RuntimeState) {
         return;
     }
     let horizons = [GoalHorizon::Corto, GoalHorizon::Mediano, GoalHorizon::Largo];
-    let deadline = if form.deadline.is_empty() { None } else { Some(form.deadline.clone()) };
+    let deadline = form.deadline.to_date_string();
 
     match state.services.finance.create_goal(NewGoal {
         name: form.name.trim().to_string(), target_amount: target,
@@ -333,14 +344,17 @@ pub(crate) fn render_transaction_form(frame: &mut ratatui::Frame, state: &Runtim
     let form = &state.transaction_form;
     let types = ["← Gasto →", "← Ingreso →"];
     let mut lines = vec![
-        form_line("Monto", &form.amount, form.field == 0),
-        form_line("Tipo", types[form.tx_type_idx], form.field == 1),
-        form_line("Categoría", &form.category, form.field == 2),
-        form_line("Descripción", &form.description, form.field == 3),
-        form_line("Fecha", &form.date, form.field == 4),
+        super::form_line("Monto", form.amount.clone(), form.field == 0),
+        super::form_line("Tipo", types[form.tx_type_idx].to_string(), form.field == 1),
+        super::form_line("Categoría", form.category.clone(), form.field == 2),
+        super::form_line("Descripción", form.description.clone(), form.field == 3),
+        date_input_line(
+            "Fecha", &form.date, form.field == 4,
+            &state.locale.hints.date_input_inactive, &state.locale.hints.no_date, &state.locale.hints.date_input_active,
+        ),
     ];
     if let Some(err) = &form.error {
-        lines.push(Line::from(Span::styled(err.as_str(), Style::default().fg(Color::Red))));
+        lines.push(Line::from(ratatui::text::Span::styled(err.as_str(), Style::default().fg(Color::Red))));
     }
     let block = Block::default().title("Nueva Transacción").borders(Borders::ALL);
     frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -349,14 +363,14 @@ pub(crate) fn render_transaction_form(frame: &mut ratatui::Frame, state: &Runtim
 pub(crate) fn render_debt_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let form = &state.debt_form;
     let mut lines = vec![
-        form_line("Acreedor", &form.creditor, form.field == 0),
-        form_line("Monto total", &form.total_amount, form.field == 1),
-        form_line("Tasa interés %", &form.interest_rate, form.field == 2),
-        form_line("Pago mensual", &form.monthly_payment, form.field == 3),
-        form_line("Día vencimiento", &form.due_day, form.field == 4),
+        super::form_line("Acreedor", form.creditor.clone(), form.field == 0),
+        super::form_line("Monto total", form.total_amount.clone(), form.field == 1),
+        super::form_line("Tasa interés %", form.interest_rate.clone(), form.field == 2),
+        super::form_line("Pago mensual", form.monthly_payment.clone(), form.field == 3),
+        super::form_line("Día vencimiento", form.due_day.clone(), form.field == 4),
     ];
     if let Some(err) = &form.error {
-        lines.push(Line::from(Span::styled(err.as_str(), Style::default().fg(Color::Red))));
+        lines.push(Line::from(ratatui::text::Span::styled(err.as_str(), Style::default().fg(Color::Red))));
     }
     let block = Block::default().title("Nueva Deuda").borders(Borders::ALL);
     frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -366,14 +380,17 @@ pub(crate) fn render_goal_form(frame: &mut ratatui::Frame, state: &RuntimeState,
     let form = &state.goal_form;
     let horizons = ["← Corto →", "← Mediano →", "← Largo →"];
     let mut lines = vec![
-        form_line("Nombre", &form.name, form.field == 0),
-        form_line("Monto objetivo", &form.target_amount, form.field == 1),
-        form_line("Monto actual", &form.current_amount, form.field == 2),
-        form_line("Fecha límite", &form.deadline, form.field == 3),
-        form_line("Horizonte", horizons[form.horizon_idx], form.field == 4),
+        super::form_line("Nombre", form.name.clone(), form.field == 0),
+        super::form_line("Monto objetivo", form.target_amount.clone(), form.field == 1),
+        super::form_line("Monto actual", form.current_amount.clone(), form.field == 2),
+        date_input_line(
+            "Fecha límite", &form.deadline, form.field == 3,
+            &state.locale.hints.date_input_inactive, &state.locale.hints.no_date, &state.locale.hints.date_input_active,
+        ),
+        super::form_line("Horizonte", horizons[form.horizon_idx].to_string(), form.field == 4),
     ];
     if let Some(err) = &form.error {
-        lines.push(Line::from(Span::styled(err.as_str(), Style::default().fg(Color::Red))));
+        lines.push(Line::from(ratatui::text::Span::styled(err.as_str(), Style::default().fg(Color::Red))));
     }
     let block = Block::default().title("Nueva Meta").borders(Borders::ALL);
     frame.render_widget(Paragraph::new(lines).block(block), area);
@@ -382,22 +399,12 @@ pub(crate) fn render_goal_form(frame: &mut ratatui::Frame, state: &RuntimeState,
 pub(crate) fn render_budget_form(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
     let form = &state.budget_form;
     let mut lines = vec![
-        form_line("Categoría", &form.category, form.field == 0),
-        form_line("Límite mensual", &form.monthly_limit, form.field == 1),
+        super::form_line("Categoría", form.category.clone(), form.field == 0),
+        super::form_line("Límite mensual", form.monthly_limit.clone(), form.field == 1),
     ];
     if let Some(err) = &form.error {
-        lines.push(Line::from(Span::styled(err.as_str(), Style::default().fg(Color::Red))));
+        lines.push(Line::from(ratatui::text::Span::styled(err.as_str(), Style::default().fg(Color::Red))));
     }
     let block = Block::default().title("Presupuesto").borders(Borders::ALL);
     frame.render_widget(Paragraph::new(lines).block(block), area);
-}
-
-fn form_line<'a>(label: &'a str, value: &'a str, focused: bool) -> Line<'a> {
-    let indicator = if focused { "▶ " } else { "  " };
-    let style = if focused { Style::default().fg(Color::Cyan) } else { Style::default() };
-    Line::from(vec![
-        Span::styled(indicator, style),
-        Span::styled(format!("{label}: "), Style::default().fg(Color::DarkGray)),
-        Span::styled(value, style),
-    ])
 }

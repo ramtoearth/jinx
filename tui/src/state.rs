@@ -185,15 +185,29 @@ impl Default for FilterFormState {
 // Finance form states
 // ---------------------------------------------------------------------------
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub(crate) struct TransactionFormState {
     pub(crate) amount: String,
     pub(crate) tx_type_idx: usize, // 0=gasto, 1=ingreso
     pub(crate) category: String,
     pub(crate) description: String,
-    pub(crate) date: String,
+    pub(crate) date: DateTimeInput,
     pub(crate) field: usize, // 0=amount, 1=type, 2=category, 3=description, 4=date
     pub(crate) error: Option<String>,
+}
+
+impl Default for TransactionFormState {
+    fn default() -> Self {
+        Self {
+            amount: String::new(),
+            tx_type_idx: 0,
+            category: String::new(),
+            description: String::new(),
+            date: DateTimeInput::date_only_now(),
+            field: 0,
+            error: None,
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -207,15 +221,29 @@ pub(crate) struct DebtFormState {
     pub(crate) error: Option<String>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub(crate) struct GoalFormState {
     pub(crate) name: String,
     pub(crate) target_amount: String,
     pub(crate) current_amount: String,
-    pub(crate) deadline: String,
+    pub(crate) deadline: DateTimeInput,
     pub(crate) horizon_idx: usize, // 0=corto, 1=mediano, 2=largo
     pub(crate) field: usize,
     pub(crate) error: Option<String>,
+}
+
+impl Default for GoalFormState {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            target_amount: String::new(),
+            current_amount: String::new(),
+            deadline: DateTimeInput::date_only_disabled(),
+            horizon_idx: 0,
+            field: 0,
+            error: None,
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -321,6 +349,21 @@ impl DateTimeInput {
             segment: 0,
             has_time: false,
             enabled: false,
+            typing_buf: String::new(),
+        }
+    }
+
+    pub(crate) fn date_only_now() -> Self {
+        let now = chrono::Local::now();
+        Self {
+            year: now.format("%Y").to_string().parse().unwrap_or(2026),
+            month: now.format("%m").to_string().parse().unwrap_or(1),
+            day: now.format("%d").to_string().parse().unwrap_or(1),
+            hour: 0,
+            minute: 0,
+            segment: 0,
+            has_time: false,
+            enabled: true,
             typing_buf: String::new(),
         }
     }
