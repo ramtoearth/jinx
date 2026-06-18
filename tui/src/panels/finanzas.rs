@@ -18,7 +18,16 @@ pub(crate) fn handle_finanzas_key(state: &mut RuntimeState, key: crossterm::even
             state.finance_month = next_month(&state.finance_month);
         }
         KeyCode::Char('n') => {
-            // TODO Phase E: open transaction form modal
+            crate::modals::open_transaction_modal(state);
+        }
+        KeyCode::Char('d') => {
+            crate::modals::open_debt_modal(state);
+        }
+        KeyCode::Char('g') => {
+            crate::modals::open_goal_modal(state);
+        }
+        KeyCode::Char('b') => {
+            crate::modals::open_budget_modal(state);
         }
         _ => {}
     }

@@ -72,6 +72,10 @@ pub enum Modal {
     Settings,
     DeleteNote { id: i64 },
     ExportNote { id: i64 },
+    NewTransaction,
+    NewDebt,
+    NewGoal,
+    EditBudget,
 }
 
 // ---------------------------------------------------------------------------

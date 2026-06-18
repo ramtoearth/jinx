@@ -5,6 +5,7 @@ mod filter_form;
 mod settings_form;
 mod export_note;
 mod delete_confirm;
+mod finance_forms;
 
 pub(crate) use task_form::*;
 pub(crate) use event_form::*;
@@ -13,6 +14,7 @@ pub(crate) use filter_form::*;
 pub(crate) use settings_form::*;
 pub(crate) use export_note::*;
 pub(crate) use delete_confirm::*;
+pub(crate) use finance_forms::*;
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -66,6 +68,10 @@ pub(crate) fn handle_modal_key(state: &mut RuntimeState, key: KeyEvent) {
         Some(Modal::Settings) => handle_settings_form_key(state, key),
         Some(Modal::FilterTasks) => handle_filter_form_key(state, key),
         Some(Modal::ExportNote { .. }) => handle_export_note_key(state, key),
+        Some(Modal::NewTransaction) => handle_transaction_form_key(state, key),
+        Some(Modal::NewDebt) => handle_debt_form_key(state, key),
+        Some(Modal::NewGoal) => handle_goal_form_key(state, key),
+        Some(Modal::EditBudget) => handle_budget_form_key(state, key),
         _ => { if key.code == KeyCode::Esc { state.app.modal = None; } }
     }
 }
@@ -126,6 +132,10 @@ pub(crate) fn render_modal(frame: &mut ratatui::Frame, state: &RuntimeState, are
         Some(Modal::Settings) => render_settings_form(frame, state, popup),
         Some(Modal::FilterTasks) => render_filter_form(frame, state, popup),
         Some(Modal::ExportNote { .. }) => render_export_note_modal(frame, state, popup),
+        Some(Modal::NewTransaction) => render_transaction_form(frame, state, popup),
+        Some(Modal::NewDebt) => render_debt_form(frame, state, popup),
+        Some(Modal::NewGoal) => render_goal_form(frame, state, popup),
+        Some(Modal::EditBudget) => render_budget_form(frame, state, popup),
         _ => {}
     }
 }

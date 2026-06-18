@@ -181,6 +181,51 @@ impl Default for FilterFormState {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Finance form states
+// ---------------------------------------------------------------------------
+
+#[derive(Default, Clone)]
+pub(crate) struct TransactionFormState {
+    pub(crate) amount: String,
+    pub(crate) tx_type_idx: usize, // 0=gasto, 1=ingreso
+    pub(crate) category: String,
+    pub(crate) description: String,
+    pub(crate) date: String,
+    pub(crate) field: usize, // 0=amount, 1=type, 2=category, 3=description, 4=date
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct DebtFormState {
+    pub(crate) creditor: String,
+    pub(crate) total_amount: String,
+    pub(crate) interest_rate: String,
+    pub(crate) monthly_payment: String,
+    pub(crate) due_day: String,
+    pub(crate) field: usize,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct GoalFormState {
+    pub(crate) name: String,
+    pub(crate) target_amount: String,
+    pub(crate) current_amount: String,
+    pub(crate) deadline: String,
+    pub(crate) horizon_idx: usize, // 0=corto, 1=mediano, 2=largo
+    pub(crate) field: usize,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct BudgetFormState {
+    pub(crate) category: String,
+    pub(crate) monthly_limit: String,
+    pub(crate) field: usize,
+    pub(crate) error: Option<String>,
+}
+
 pub(crate) struct DirBrowserEntry {
     pub(crate) name: String,
     pub(crate) is_dir: bool,
@@ -715,6 +760,10 @@ pub(crate) struct RuntimeState {
     pub(crate) cmd_picker_filtered: Vec<usize>,
     // Finance panel
     pub(crate) finance_month: String,
+    pub(crate) transaction_form: TransactionFormState,
+    pub(crate) debt_form: DebtFormState,
+    pub(crate) goal_form: GoalFormState,
+    pub(crate) budget_form: BudgetFormState,
     // Layout rects for mouse hit-testing
     pub(crate) panel_area: Option<Rect>,
     pub(crate) input_area: Option<Rect>,
