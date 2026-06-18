@@ -158,8 +158,6 @@ pub enum AppEvent {
     StatusMessage(String),
     /// Close the active modal without saving.
     CloseModal,
-    /// Tick — used to trigger Panel_Proximos refresh.
-    Tick,
 }
 
 // ---------------------------------------------------------------------------
@@ -242,9 +240,6 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> AppState {
         AppEvent::CloseModal => {
             state.modal = None;
         }
-        AppEvent::Tick => {
-            // Proximos panel refresh is driven by storage_version in the renderer
-        }
     }
     state
 }
@@ -255,30 +250,11 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> AppState {
 
 fn dispatch_panel_key(state: &mut AppState, key: KeyEvent) {
     match state.focused_panel {
-        Panel::Chat => dispatch_chat_key(state, key),
-        Panel::Tareas => dispatch_tareas_key(state, key),
-        Panel::Calendario => dispatch_calendario_key(state, key),
-        Panel::Notas => dispatch_notas_key(state, key),
+        Panel::Tareas => {
+            if let KeyCode::Char('n') = key.code {
+                state.modal = Some(Modal::NewTask);
+            }
+        }
+        _ => {}
     }
-}
-
-fn dispatch_chat_key(_state: &mut AppState, _key: KeyEvent) {
-    // Chat input is handled directly by the Panel_Chat widget; the app state
-    // has nothing extra to track here.
-}
-
-fn dispatch_tareas_key(state: &mut AppState, key: KeyEvent) {
-    // Opening a blank modal is a pure state transition; editing/deleting needs
-    // the cursor position held in RuntimeState and is handled in main.rs.
-    if let KeyCode::Char('n') = key.code {
-        state.modal = Some(Modal::NewTask);
-    }
-}
-
-fn dispatch_calendario_key(_state: &mut AppState, _key: KeyEvent) {
-    // Handled directly in main.rs handle_calendario_key
-}
-
-fn dispatch_notas_key(_state: &mut AppState, _key: KeyEvent) {
-    // Handled directly in main.rs / notas.rs
 }
