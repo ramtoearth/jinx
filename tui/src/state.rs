@@ -713,6 +713,8 @@ pub(crate) struct RuntimeState {
     pub(crate) cmd_picker_active: bool,
     pub(crate) cmd_picker_cursor: usize,
     pub(crate) cmd_picker_filtered: Vec<usize>,
+    // Finance panel
+    pub(crate) finance_month: String,
     // Layout rects for mouse hit-testing
     pub(crate) panel_area: Option<Rect>,
     pub(crate) input_area: Option<Rect>,

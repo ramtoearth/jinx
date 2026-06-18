@@ -43,6 +43,10 @@ use modals::*;
 mod panels;
 use panels::*;
 
+fn current_month() -> String {
+    chrono::Local::now().format("%Y-%m").to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -152,6 +156,7 @@ fn run_app(
         cmd_picker_active: false,
         cmd_picker_cursor: 0,
         cmd_picker_filtered: Vec::new(),
+        finance_month: current_month(),
         panel_area: None,
         input_area: None,
         history_area: None,
@@ -261,6 +266,7 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         Panel::Tareas => handle_tareas_key(state, key),
         Panel::Calendario => handle_calendario_key(state, key),
         Panel::Notas => handle_notas_key(state, key),
+        Panel::Finanzas => handle_finanzas_key(state, key),
     }
 }
 
@@ -383,6 +389,7 @@ fn render(frame: &mut ratatui::Frame, state: &mut RuntimeState) {
         Panel::Tareas => render_tareas(frame, state, chunks[1]),
         Panel::Calendario => render_calendario(frame, state, chunks[1]),
         Panel::Notas => render_notas(frame, state, chunks[1]),
+        Panel::Finanzas => render_finanzas(frame, state, chunks[1]),
     }
 
     render_status(frame, state, chunks[2]);
@@ -399,12 +406,14 @@ fn render_tabs(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         Panel::Tareas => 1,
         Panel::Calendario => 2,
         Panel::Notas => 3,
+        Panel::Finanzas => 4,
     };
     let tabs = Tabs::new(vec![
         format!("  {}  ", state.locale.panels.chat),
         format!("  {}  ", state.locale.panels.tasks),
         format!("  {}  ", state.locale.panels.calendar),
         format!("  {}  ", state.locale.panels.notes),
+        "  Finanzas  ".to_string(),
     ])
         .select(active)
         .block(Block::default().borders(Borders::ALL))

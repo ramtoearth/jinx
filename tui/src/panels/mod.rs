@@ -2,11 +2,13 @@ mod chat;
 mod tareas;
 mod calendario;
 mod notas;
+mod finanzas;
 
 pub(crate) use chat::*;
 pub(crate) use tareas::*;
 pub(crate) use calendario::*;
 pub(crate) use notas::*;
+pub(crate) use finanzas::*;
 
 use ratatui::{
     style::{Color, Style},

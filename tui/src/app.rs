@@ -11,17 +11,18 @@ use jinx_core::DomainError;
 // Panel identity
 // ---------------------------------------------------------------------------
 
-/// The four panels of the TUI layout.
+/// The five panels of the TUI layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Chat,
     Tareas,
     Calendario,
     Notas,
+    Finanzas,
 }
 
-/// Fixed focus cycle: Chat → Tareas → Calendario → Notas → Chat
-static CYCLE: [Panel; 4] = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas];
+/// Fixed focus cycle: Chat → Tareas → Calendario → Notas → Finanzas → Chat
+static CYCLE: [Panel; 5] = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas, Panel::Finanzas];
 
 impl Panel {
     fn index(self) -> usize {
@@ -30,11 +31,12 @@ impl Panel {
             Self::Tareas => 1,
             Self::Calendario => 2,
             Self::Notas => 3,
+            Self::Finanzas => 4,
         }
     }
 
     fn from_index(i: usize) -> Self {
-        CYCLE[i % 4]
+        CYCLE[i % CYCLE.len()]
     }
 
     /// Advance focus forward (Tab).
@@ -44,7 +46,7 @@ impl Panel {
 
     /// Advance focus backward (Shift+Tab).
     pub fn prev(self) -> Self {
-        Self::from_index(self.index() + 3) // +3 mod 4 = -1 mod 4
+        Self::from_index(self.index() + CYCLE.len() - 1)
     }
 }
 
