@@ -10,7 +10,7 @@ use jinx_core::{GoalHorizon, NewBudget, NewCategory, NewDebt, NewGoal, NewTransa
 use crate::state::*;
 
 const TX_FIELDS: usize = 5;
-const DEBT_FIELDS: usize = 5;
+const DEBT_FIELDS: usize = 6;
 const GOAL_FIELDS: usize = 5;
 const BUDGET_FIELDS: usize = 2;
 
@@ -168,6 +168,16 @@ pub(crate) fn handle_transaction_form_key(state: &mut RuntimeState, key: KeyEven
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_debt_form_key(state: &mut RuntimeState, key: KeyEvent) {
+    if state.debt_form.field == 5 {
+        match state.debt_form.start_date.handle_key(key.code) {
+            DateInputResult::Consumed => return,
+            DateInputResult::NextField => { state.debt_form.field = 0; return; }
+            DateInputResult::PrevField => { state.debt_form.field = 4; return; }
+            DateInputResult::Submit => { save_debt(state); return; }
+            DateInputResult::Cancel => { state.app.modal = None; return; }
+        }
+    }
+
     match key.code {
         KeyCode::Esc => { state.app.modal = None; }
         KeyCode::Enter => save_debt(state),
@@ -332,12 +342,14 @@ fn save_debt(state: &mut RuntimeState) {
         }
     };
     let due_day: Option<u32> = if form.due_day.is_empty() { None } else { form.due_day.parse().ok() };
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let start_date = form.start_date.to_date_string().unwrap_or_else(|| {
+        chrono::Local::now().format("%Y-%m-%d").to_string()
+    });
 
     match state.services.finance.create_debt(NewDebt {
         creditor: form.creditor.trim().to_string(), total_amount: total,
         remaining_amount: total, interest_rate: rate,
-        monthly_payment: payment, due_day, start_date: today,
+        monthly_payment: payment, due_day, start_date,
     }) {
         Ok(_) => { state.app.modal = None; state.app.status_bar = "Deuda registrada".into(); }
         Err(e) => { state.debt_form.error = Some(e.message()); }
@@ -452,6 +464,10 @@ pub(crate) fn render_debt_form(frame: &mut ratatui::Frame, state: &RuntimeState,
         super::form_line("Tasa interés %", form.interest_rate.clone(), form.field == 2),
         super::form_line("Pago mensual", form.monthly_payment.clone(), form.field == 3),
         super::form_line("Día vencimiento", form.due_day.clone(), form.field == 4),
+        date_input_line(
+            "Fecha inicio", &form.start_date, form.field == 5,
+            &state.locale.hints.date_input_inactive, &state.locale.hints.no_date, &state.locale.hints.date_input_active,
+        ),
     ];
     if let Some(err) = &form.error {
         lines.push(Line::from(ratatui::text::Span::styled(err.as_str(), Style::default().fg(Color::Red))));

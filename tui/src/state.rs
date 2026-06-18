@@ -214,15 +214,31 @@ impl Default for TransactionFormState {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub(crate) struct DebtFormState {
     pub(crate) creditor: String,
     pub(crate) total_amount: String,
     pub(crate) interest_rate: String,
     pub(crate) monthly_payment: String,
     pub(crate) due_day: String,
+    pub(crate) start_date: DateTimeInput,
     pub(crate) field: usize,
     pub(crate) error: Option<String>,
+}
+
+impl Default for DebtFormState {
+    fn default() -> Self {
+        Self {
+            creditor: String::new(),
+            total_amount: String::new(),
+            interest_rate: String::new(),
+            monthly_payment: String::new(),
+            due_day: String::new(),
+            start_date: DateTimeInput::date_only_now(),
+            field: 0,
+            error: None,
+        }
+    }
 }
 
 #[derive(Clone)]
