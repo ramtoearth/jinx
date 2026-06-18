@@ -132,6 +132,8 @@ pub struct Hints {
     pub notes_edit: String,
     #[serde(default)]
     pub export_note: String,
+    #[serde(default)]
+    pub finanzas: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

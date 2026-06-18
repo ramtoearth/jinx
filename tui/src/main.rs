@@ -431,7 +431,15 @@ fn render_tabs(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
 }
 
 fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let hint = &state.locale.hints.global;
+    let global = &state.locale.hints.global;
+    let panel_hint = match state.app.focused_panel {
+        Panel::Finanzas => Some(state.locale.hints.finanzas.as_str()),
+        _ => None,
+    };
+    let hint = match panel_hint {
+        Some(ph) if !ph.is_empty() => format!("{ph}  │  {global}"),
+        _ => global.to_string(),
+    };
 
     if let Some((spinner_char, secs)) = spinner_state(&state.pending_request) {
         let working = state.locale.chat.thinking_status
@@ -442,7 +450,7 @@ fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         frame.render_widget(para, area);
     } else {
         let text = if state.app.status_bar.is_empty() {
-            hint.to_string()
+            hint
         } else {
             format!("{}  │  {}", state.app.status_bar, hint)
         };
