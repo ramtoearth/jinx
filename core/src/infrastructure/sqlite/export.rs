@@ -7,6 +7,7 @@ use crate::domain::{
     calendar::EventRepository,
     group::GroupRepository,
 };
+use crate::application::export_service::ExportBackend;
 
 use super::SqliteStorage;
 
@@ -291,6 +292,20 @@ impl SqliteStorage {
         }
 
         Ok(())
+    }
+}
+
+impl ExportBackend for SqliteStorage {
+    fn export_markdown(&self, output_path: &Path) -> Result<PathBuf, DomainError> {
+        self.export_markdown(output_path)
+    }
+
+    fn export_sqlite(&self, output_path: &Path) -> Result<PathBuf, DomainError> {
+        self.export_sqlite(output_path)
+    }
+
+    fn import_sqlite(&self, source_path: &Path) -> Result<(), DomainError> {
+        self.import_sqlite(source_path)
     }
 }
 

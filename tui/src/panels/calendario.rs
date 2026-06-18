@@ -6,9 +6,6 @@ use ratatui::{
     widgets::{List, ListItem},
 };
 use jinx_core::{TaskFilter, TaskPatch, TaskStatus};
-use jinx_core::task::TaskRepository;
-use jinx_core::calendar::EventRepository;
-use jinx_core::group::GroupRepository;
 
 use crate::modals::{open_new_event_modal, open_edit_event_modal, open_edit_task_modal, today_str, week_bounds, month_bounds};
 use crate::state::*;
@@ -23,8 +20,8 @@ use super::panel_block;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
-    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
-    let events = state.storage.list_events(None, None).unwrap_or_default();
+    let tasks = state.services.tasks.list(TaskFilter::default()).unwrap_or_default();
+    let events = state.services.calendar.list(None, None).unwrap_or_default();
     let mut view = jinx::calendario::calendar_layout(&tasks, &events);
     if let Some((from, to)) = calendar_date_range(state.calendar_filter_idx) {
         view.retain(|date, _| date.as_str() >= from.as_str() && date.as_str() <= to.as_str());
@@ -66,7 +63,7 @@ pub(crate) fn handle_calendario_key(state: &mut RuntimeState, key: crossterm::ev
                     } else {
                         TaskStatus::Completada
                     };
-                    match state.storage.update_task(
+                    match state.services.tasks.update(
                         task_id,
                         TaskPatch { status: Some(new_status), ..Default::default() },
                     ) {
@@ -134,8 +131,8 @@ pub(crate) fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeS
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
-    let events = state.storage.list_events(None, None).unwrap_or_default();
+    let tasks = state.services.tasks.list(TaskFilter::default()).unwrap_or_default();
+    let events = state.services.calendar.list(None, None).unwrap_or_default();
     let mut view = jinx::calendario::calendar_layout(&tasks, &events);
     if let Some((from, to)) = calendar_date_range(state.calendar_filter_idx) {
         view.retain(|date, _| date.as_str() >= from.as_str() && date.as_str() <= to.as_str());
@@ -143,7 +140,7 @@ pub(crate) fn render_calendario(frame: &mut ratatui::Frame, state: &mut RuntimeS
     let flat = flat_entries(&view);
 
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let groups = state.storage.list_groups().unwrap_or_default();
+    let groups = state.services.groups.list().unwrap_or_default();
     let mut lines: Vec<ListItem> = vec![];
 
     if state.calendar_filter_idx > 0 {

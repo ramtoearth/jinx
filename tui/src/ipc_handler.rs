@@ -3,13 +3,10 @@
 //!
 //! This module runs in the IPC reader thread (see `main.rs` startup).
 
-use std::sync::Arc;
-
 use jinx_core::{
-    DomainError, EventPatch, HexColor, NewEvent, NewGroup, NewNote, NewTask, NotePatch, Priority,
-    TaskFilter, TaskPatch, TaskStatus,
+    AppServices, DomainError, EventPatch, HexColor, NewEvent, NewGroup, NewNote, NewTask,
+    NotePatch, Priority, TaskFilter, TaskPatch, TaskStatus,
 };
-use jinx_core::SqliteStorage;
 
 use crate::ipc::{
     Envelope, Kind, MessageType, StorageCompleteTaskRequest, StorageCompleteTaskResponse,
@@ -99,12 +96,8 @@ fn domain_err_to_ipc(e: DomainError) -> IpcError {
 /// Handle a single `storage.*` request envelope and return a response envelope.
 pub fn handle_storage_request(
     envelope: &Envelope,
-    storage: &Arc<SqliteStorage>,
+    services: &AppServices,
 ) -> Envelope {
-    use jinx_core::task::TaskRepository;
-    use jinx_core::calendar::EventRepository;
-    use jinx_core::group::GroupRepository;
-    use jinx_core::note::NoteRepository;
     let response_base = Envelope::new_empty(Kind::Response, envelope.message_type)
         .with_ref(envelope.id);
 
@@ -130,7 +123,7 @@ pub fn handle_storage_request(
                 to_date: req.to_date,
                 no_deadline: false,
             };
-            match storage.list_tasks(filter) {
+            match services.tasks.list(filter) {
                 Ok(tasks) => response_base.clone()
                     .with_payload(&StorageListTasksResponse {
                         tasks: tasks.into_iter().map(task_to_dto).collect(),
@@ -145,7 +138,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.search_tasks(&r.query) {
+                Some(r) => match services.tasks.search(&r.query) {
                     Ok(tasks) => response_base.clone()
                         .with_payload(&StorageSearchTasksResponse {
                             tasks: tasks.into_iter().map(task_to_dto).collect(),
@@ -173,7 +166,7 @@ pub fn handle_storage_request(
                         deadline: r.deadline,
                         group_id: r.group_id,
                     };
-                    match storage.create_task(input) {
+                    match services.tasks.create(input) {
                         Ok(t) => response_base.clone()
                             .with_payload(&StorageCreateTaskResponse { task: task_to_dto(t) })
                             .unwrap_or(response_base),
@@ -205,7 +198,7 @@ pub fn handle_storage_request(
                         deadline: r.patch.deadline,
                         group_id: r.patch.group_id,
                     };
-                    match storage.update_task(r.id, patch) {
+                    match services.tasks.update(r.id, patch) {
                         Ok(t) => response_base.clone()
                             .with_payload(&StorageUpdateTaskResponse { task: task_to_dto(t) })
                             .unwrap_or(response_base),
@@ -220,7 +213,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.complete_task(r.id) {
+                Some(r) => match services.tasks.complete(r.id) {
                     Ok(t) => response_base.clone()
                         .with_payload(&StorageCompleteTaskResponse { task: task_to_dto(t) })
                         .unwrap_or(response_base),
@@ -234,7 +227,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.delete_task(r.id) {
+                Some(r) => match services.tasks.delete(r.id) {
                     Ok(()) => response_base.clone()
                         .with_payload(&StorageDeleteTaskResponse {})
                         .unwrap_or(response_base),
@@ -252,7 +245,7 @@ pub fn handle_storage_request(
                 .unwrap_or(None)
                 .unwrap_or(None)
                 .unwrap_or_default();
-            match storage.list_events(req.from_date.as_deref(), req.to_date.as_deref()) {
+            match services.calendar.list(req.from_date.as_deref(), req.to_date.as_deref()) {
                 Ok(events) => response_base.clone()
                     .with_payload(&StorageListEventsResponse {
                         events: events.into_iter().map(event_to_dto).collect(),
@@ -275,7 +268,7 @@ pub fn handle_storage_request(
                         duration_minutes: r.duration_minutes,
                         group_id: r.group_id,
                     };
-                    match storage.create_event(input) {
+                    match services.calendar.create(input) {
                         Ok(e) => response_base.clone()
                             .with_payload(&StorageCreateEventResponse { event: event_to_dto(e) })
                             .unwrap_or(response_base),
@@ -298,7 +291,7 @@ pub fn handle_storage_request(
                         duration_minutes: r.patch.duration_minutes,
                         group_id: r.patch.group_id,
                     };
-                    match storage.update_event(r.id, patch) {
+                    match services.calendar.update(r.id, patch) {
                         Ok(e) => response_base.clone()
                             .with_payload(&StorageUpdateEventResponse { event: event_to_dto(e) })
                             .unwrap_or(response_base),
@@ -313,7 +306,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.delete_event(r.id) {
+                Some(r) => match services.calendar.delete(r.id) {
                     Ok(()) => response_base.clone()
                         .with_payload(&StorageDeleteEventResponse {})
                         .unwrap_or(response_base),
@@ -326,7 +319,7 @@ pub fn handle_storage_request(
         // Groups
         // ------------------------------------------------------------------
         MessageType::StorageListGroups => {
-            match storage.list_groups() {
+            match services.groups.list() {
                 Ok(groups) => response_base.clone()
                     .with_payload(&StorageListGroupsResponse {
                         groups: groups.into_iter().map(group_to_dto).collect(),
@@ -344,7 +337,7 @@ pub fn handle_storage_request(
                 Some(r) => {
                     match HexColor::new(r.color) {
                         Err(msg) => response_base.with_error(IpcError::new("VALIDATION_FAILED", msg)),
-                        Ok(color) => match storage.create_group(NewGroup { name: r.name, color }) {
+                        Ok(color) => match services.groups.create(NewGroup { name: r.name, color }) {
                             Ok(g) => response_base.clone()
                                 .with_payload(&StorageCreateGroupResponse { group: group_to_dto(g) })
                                 .unwrap_or(response_base),
@@ -360,7 +353,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.rename_group(r.id, r.name) {
+                Some(r) => match services.groups.rename(r.id, r.name) {
                     Ok(g) => response_base.clone()
                         .with_payload(&StorageRenameGroupResponse { group: group_to_dto(g) })
                         .unwrap_or(response_base),
@@ -377,7 +370,7 @@ pub fn handle_storage_request(
                 Some(r) => {
                     match HexColor::new(r.color) {
                         Err(msg) => response_base.with_error(IpcError::new("VALIDATION_FAILED", msg)),
-                        Ok(color) => match storage.recolor_group(r.id, color) {
+                        Ok(color) => match services.groups.recolor(r.id, color) {
                             Ok(g) => response_base.clone()
                                 .with_payload(&StorageRecolorGroupResponse { group: group_to_dto(g) })
                                 .unwrap_or(response_base),
@@ -393,7 +386,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.delete_group(r.id) {
+                Some(r) => match services.groups.delete(r.id) {
                     Ok(()) => response_base.clone()
                         .with_payload(&StorageDeleteGroupResponse {})
                         .unwrap_or(response_base),
@@ -412,7 +405,7 @@ pub fn handle_storage_request(
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
                     let path = std::path::Path::new(&r.output_path);
-                    match storage.export_markdown(path) {
+                    match services.export.export_markdown(path) {
                         Ok(p) => response_base.clone()
                             .with_payload(&StorageExportMarkdownResponse {
                                 written_path: p.to_string_lossy().to_string(),
@@ -431,7 +424,7 @@ pub fn handle_storage_request(
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
                     let path = std::path::Path::new(&r.output_path);
-                    match storage.export_sqlite(path) {
+                    match services.export.export_sqlite(path) {
                         Ok(p) => response_base.clone()
                             .with_payload(&StorageExportSqliteResponse {
                                 written_path: p.to_string_lossy().to_string(),
@@ -447,7 +440,7 @@ pub fn handle_storage_request(
         // Notes
         // ------------------------------------------------------------------
         MessageType::StorageListNotes => {
-            match storage.list_notes() {
+            match services.notes.list() {
                 Ok(notes) => response_base.clone()
                     .with_payload(&StorageListNotesResponse {
                         notes: notes.into_iter().map(note_to_dto).collect(),
@@ -463,7 +456,7 @@ pub fn handle_storage_request(
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
-                    match storage.search_notes(&r.query) {
+                    match services.notes.search(&r.query) {
                         Ok(notes) => response_base.clone()
                             .with_payload(&StorageSearchNotesResponse {
                                 notes: notes.into_iter().map(note_to_dto).collect(),
@@ -485,7 +478,7 @@ pub fn handle_storage_request(
                         title: r.title,
                         body: r.body,
                     };
-                    match storage.create_note(input) {
+                    match services.notes.create(input) {
                         Ok(n) => response_base.clone()
                             .with_payload(&StorageCreateNoteResponse { note: note_to_dto(n) })
                             .unwrap_or(response_base),
@@ -505,7 +498,7 @@ pub fn handle_storage_request(
                         title: r.patch.title,
                         body: r.patch.body,
                     };
-                    match storage.update_note(r.id, patch) {
+                    match services.notes.update(r.id, patch) {
                         Ok(n) => response_base.clone()
                             .with_payload(&StorageUpdateNoteResponse { note: note_to_dto(n) })
                             .unwrap_or(response_base),
@@ -521,7 +514,7 @@ pub fn handle_storage_request(
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
-                    match storage.delete_note(r.id) {
+                    match services.notes.delete(r.id) {
                         Ok(()) => response_base.clone()
                             .with_payload(&StorageDeleteNoteResponse {})
                             .unwrap_or(response_base),
@@ -538,7 +531,7 @@ pub fn handle_storage_request(
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
                     let path = std::path::Path::new(&r.output_path);
-                    match storage.export_note(r.id, path) {
+                    match services.notes.export(r.id, path) {
                         Ok(p) => response_base.clone()
                             .with_payload(&StorageExportNoteResponse {
                                 written_path: p.to_string_lossy().to_string(),

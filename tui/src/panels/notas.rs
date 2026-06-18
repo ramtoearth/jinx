@@ -4,7 +4,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
-use jinx_core::note::NoteRepository;
+use jinx_core::{NewNote, NotePatch};
 
 use crate::state::*;
 use jinx::app::Modal;
@@ -17,9 +17,9 @@ use jinx::text_editor::TextEditor;
 
 pub(crate) fn refresh_notes_cache(state: &mut RuntimeState) {
     state.notes_cache = if state.notes_search_active && !state.notes_search_query.is_empty() {
-        state.storage.search_notes(&state.notes_search_query).unwrap_or_default()
+        state.services.notes.search(&state.notes_search_query).unwrap_or_default()
     } else {
-        state.storage.list_notes().unwrap_or_default()
+        state.services.notes.list().unwrap_or_default()
     };
 }
 
@@ -101,7 +101,7 @@ pub(crate) fn handle_notes_list_key(state: &mut RuntimeState, key: crossterm::ev
             }
         }
         KeyCode::Char('n') => {
-            match state.storage.create_note(jinx_core::NewNote {
+            match state.services.notes.create(NewNote {
                 title: String::new(),
                 body: String::new(),
             }) {
@@ -288,7 +288,7 @@ pub(crate) fn save_current_note(state: &mut RuntimeState) {
         } else {
             title
         };
-        match state.storage.update_note(id, jinx_core::NotePatch {
+        match state.services.notes.update(id, NotePatch {
             title: Some(title_val),
             body: Some(body),
         }) {

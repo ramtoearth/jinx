@@ -5,10 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use jinx_core::{
-    EventPatch, NewEvent,
-    calendar::EventRepository,
-};
+use jinx_core::{EventPatch, NewEvent};
 
 use crate::state::*;
 use jinx::text_editor::TextEditor;
@@ -21,7 +18,7 @@ pub(crate) fn open_new_event_modal(state: &mut RuntimeState) {
 
 pub(crate) fn open_edit_event_modal(state: &mut RuntimeState, id: i64) {
     crate::panels::refresh_groups_cache(state);
-    let events = state.storage.list_events(None, None).unwrap_or_default();
+    let events = state.services.calendar.list(None, None).unwrap_or_default();
     if let Some(ev) = events.iter().find(|e| e.id == id) {
         let group_idx = ev.group_id
             .and_then(|gid| state.groups_cache.iter().position(|g| g.id == gid).map(|p| p + 1))
@@ -147,7 +144,7 @@ pub(crate) fn save_event(state: &mut RuntimeState) {
     };
 
     let result = if let Some(id) = form.edit_id {
-        state.storage.update_event(id, EventPatch {
+        state.services.calendar.update(id, EventPatch {
             title: Some(title_text.trim().to_string()),
             start_date: Some(start_date.clone()),
             start_time: Some(start_time.clone()),
@@ -155,7 +152,7 @@ pub(crate) fn save_event(state: &mut RuntimeState) {
             group_id: Some(group_id),
         }).map(|e| e.id)
     } else {
-        state.storage.create_event(NewEvent {
+        state.services.calendar.create(NewEvent {
             title: title_text.trim().to_string(),
             start_date,
             start_time,

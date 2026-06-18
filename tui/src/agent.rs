@@ -311,7 +311,7 @@ pub(crate) fn handle_agent_envelope(state: &mut RuntimeState, env: Envelope) {
             state.app.status_bar = state.locale.status.ready.clone();
         }
         mt if is_storage_message_type(mt) => {
-            let response = ipc_handler::handle_storage_request(&env, &state.storage);
+            let response = ipc_handler::handle_storage_request(&env, &state.services);
 
             // Capture note results for the interactive picker (only search, not list)
             if matches!(mt, MessageType::StorageSearchNotes) {

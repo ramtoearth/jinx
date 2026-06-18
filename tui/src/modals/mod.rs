@@ -21,10 +21,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::Clear,
 };
-use jinx_core::{
-    task::TaskRepository, calendar::EventRepository, group::GroupRepository,
-    note::NoteRepository,
-};
 
 use crate::state::*;
 use jinx::app::Modal;
@@ -37,25 +33,25 @@ pub(crate) fn handle_modal_key(state: &mut RuntimeState, key: KeyEvent) {
         Some(Modal::NewEvent) | Some(Modal::EditEvent { .. }) => handle_event_form_key(state, key),
         Some(Modal::NewGroup) | Some(Modal::EditGroup { .. }) => handle_group_form_key(state, key),
         Some(Modal::DeleteTask { id }) => handle_delete_key(state, key, |s| {
-            match s.storage.delete_task(id) {
+            match s.services.tasks.delete(id) {
                 Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.task_deleted.clone(); if s.task_cursor > 0 { s.task_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
         Some(Modal::DeleteEvent { id }) => handle_delete_key(state, key, |s| {
-            match s.storage.delete_event(id) {
+            match s.services.calendar.delete(id) {
                 Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.event_deleted.clone(); if s.calendar_cursor > 0 { s.calendar_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
         Some(Modal::DeleteGroup { id }) => handle_delete_key(state, key, |s| {
-            match s.storage.delete_group(id) {
+            match s.services.groups.delete(id) {
                 Ok(_) => { s.app.modal = None; s.app.status_bar = s.locale.status.group_deleted.clone(); if s.group_cursor > 0 { s.group_cursor -= 1; } }
                 Err(e) => s.app.status_bar = format!("Error: {}", e.message()),
             }
         }),
         Some(Modal::DeleteNote { id }) => handle_delete_key(state, key, |s| {
-            match s.storage.delete_note(id) {
+            match s.services.notes.delete(id) {
                 Ok(_) => {
                     s.app.modal = None;
                     s.app.status_bar = s.locale.status.note_deleted.clone();

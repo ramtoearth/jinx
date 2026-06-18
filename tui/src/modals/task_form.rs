@@ -5,10 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use jinx_core::{
-    NewTask, Priority, TaskFilter, TaskPatch, TaskStatus,
-    task::TaskRepository,
-};
+use jinx_core::{NewTask, Priority, TaskFilter, TaskPatch, TaskStatus};
 
 use crate::state::*;
 use jinx::text_editor::TextEditor;
@@ -21,7 +18,7 @@ pub(crate) fn open_new_task_modal(state: &mut RuntimeState) {
 
 pub(crate) fn open_edit_task_modal(state: &mut RuntimeState, id: i64) {
     crate::panels::refresh_groups_cache(state);
-    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
+    let tasks = state.services.tasks.list(TaskFilter::default()).unwrap_or_default();
     if let Some(t) = tasks.iter().find(|t| t.id == id) {
         let priority_idx = match t.priority {
             Priority::Alta => 0,
@@ -143,7 +140,7 @@ pub(crate) fn save_task(state: &mut RuntimeState) {
     };
 
     let result = if let Some(id) = form.edit_id {
-        state.storage.update_task(id, TaskPatch {
+        state.services.tasks.update(id, TaskPatch {
             title: Some(title_text.trim().to_string()),
             priority: Some(priority),
             deadline: Some(deadline),
@@ -151,7 +148,7 @@ pub(crate) fn save_task(state: &mut RuntimeState) {
             status: Some(statuses[form.status_idx]),
         }).map(|t| t.id)
     } else {
-        state.storage.create_task(NewTask {
+        state.services.tasks.create(NewTask {
             title: title_text.trim().to_string(),
             priority: Some(priority),
             deadline,

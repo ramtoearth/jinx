@@ -25,11 +25,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs},
     Terminal,
 };
-use jinx_core::{
-    TaskFilter,
-    task::TaskRepository, calendar::EventRepository,
-};
-use jinx_core::SqliteStorage;
+use jinx_core::{AppServices, SqliteStorage, TaskFilter};
 
 use jinx::app::{AppEvent, AppState, Panel, MIN_COLS, MIN_ROWS};
 use jinx::calendario::{entry_count, flat_entries};
@@ -120,7 +116,7 @@ fn run_app(
         tareas_section: TareasSection::default(),
         tareas_filter: ActiveTaskFilter::default(),
         color_mode: detect_color_mode(),
-        storage: storage.clone(),
+        services: AppServices::new(storage.clone()),
         agent_child: None,
         agent_stdin: None,
         agent_rx: None,
@@ -310,12 +306,12 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
             }
             match state.app.focused_panel {
                 Panel::Tareas => {
-                    let count = state.storage.list_tasks(state.tareas_filter.to_storage_filter()).unwrap_or_default().len();
+                    let count = state.services.tasks.list(state.tareas_filter.to_storage_filter()).unwrap_or_default().len();
                     if state.task_cursor + 1 < count { state.task_cursor += 1; }
                 }
                 Panel::Calendario => {
-                    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
-                    let events = state.storage.list_events(None, None).unwrap_or_default();
+                    let tasks = state.services.tasks.list(TaskFilter::default()).unwrap_or_default();
+                    let events = state.services.calendar.list(None, None).unwrap_or_default();
                     let mut view = jinx::calendario::calendar_layout(&tasks, &events);
                     if let Some((from, to)) = calendar_date_range(state.calendar_filter_idx) {
                         view.retain(|date, _| date.as_str() >= from.as_str() && date.as_str() <= to.as_str());
@@ -458,7 +454,7 @@ mod tests {
 
     #[test]
     fn p24_storage_error_message_in_status_bar() {
-        let storage = Arc::new(SqliteStorage::in_memory().expect("in-memory"));
+        let _storage = Arc::new(SqliteStorage::in_memory().expect("in-memory"));
         let mut app = AppState::new(120, 40);
 
         let err = jinx_core::DomainError::NotFound("Task 99 not found".to_string());

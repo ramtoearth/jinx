@@ -1,5 +1,5 @@
 use std::process::{Child, ChildStdin};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use crossterm::event::KeyCode;
@@ -8,8 +8,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
-use jinx_core::{Group, Priority, TaskFilter, TaskStatus};
-use jinx_core::SqliteStorage;
+use jinx_core::{AppServices, Group, Priority, TaskFilter, TaskStatus};
 use uuid::Uuid;
 
 use jinx::app::AppState;
@@ -672,7 +671,7 @@ pub(crate) struct RuntimeState {
     pub(crate) tareas_section: TareasSection,
     pub(crate) tareas_filter: ActiveTaskFilter,
     pub(crate) color_mode: ColorMode,
-    pub(crate) storage: Arc<SqliteStorage>,
+    pub(crate) services: AppServices,
     pub(crate) agent_child: Option<Child>,
     pub(crate) agent_stdin: Option<ChildStdin>,
     pub(crate) agent_rx: Option<mpsc::Receiver<Envelope>>,
