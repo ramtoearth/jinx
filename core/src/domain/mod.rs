@@ -1,10 +1,16 @@
 pub mod calendar;
+pub mod finance;
 pub mod group;
 pub mod note;
 pub mod shared;
 pub mod task;
 
 pub use calendar::{Event, EventPatch, EventRepository, NewEvent};
+pub use finance::{
+    Budget, Debt, DebtPatch, FinanceRepository, Goal, GoalHorizon, GoalPatch, MonthlySummary,
+    NewBudget, NewDebt, NewGoal, NewRecurringRule, NewTransaction, RecurringPeriod, RecurringRule,
+    Transaction, TransactionFilter, TransactionType,
+};
 pub use group::{Group, GroupInfo, GroupPatch, GroupRepository, GroupsSnapshot, NewGroup};
 pub use note::{NewNote, Note, NoteRepository, NotePatch};
 pub use shared::HexColor;

@@ -100,6 +100,69 @@ static MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC);
     "#,
+    // Migration 9: Finance tables
+    r#"
+    CREATE TABLE IF NOT EXISTS fin_recurring_rules (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount       INTEGER NOT NULL,
+        tx_type      TEXT    NOT NULL CHECK (tx_type IN ('ingreso','gasto')),
+        category     TEXT    NOT NULL,
+        description  TEXT    NOT NULL DEFAULT '',
+        period       TEXT    NOT NULL CHECK (period IN ('weekly','biweekly','monthly')),
+        day_of_month INTEGER,
+        next_due     TEXT    NOT NULL,
+        active       INTEGER NOT NULL DEFAULT 1,
+        group_id     INTEGER,
+        FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS fin_transactions (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount       INTEGER NOT NULL,
+        tx_type      TEXT    NOT NULL CHECK (tx_type IN ('ingreso','gasto')),
+        category     TEXT    NOT NULL,
+        description  TEXT    NOT NULL DEFAULT '',
+        date         TEXT    NOT NULL,
+        recurring_id INTEGER,
+        group_id     INTEGER,
+        FOREIGN KEY (recurring_id) REFERENCES fin_recurring_rules(id) ON DELETE SET NULL,
+        FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS fin_budgets (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        category      TEXT    NOT NULL,
+        monthly_limit INTEGER NOT NULL,
+        month         TEXT    NOT NULL,
+        UNIQUE(category, month)
+    );
+
+    CREATE TABLE IF NOT EXISTS fin_debts (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        creditor         TEXT    NOT NULL,
+        total_amount     INTEGER NOT NULL,
+        remaining_amount INTEGER NOT NULL,
+        interest_rate    REAL,
+        monthly_payment  INTEGER NOT NULL,
+        due_day          INTEGER,
+        start_date       TEXT    NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS fin_goals (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        name           TEXT    NOT NULL,
+        target_amount  INTEGER NOT NULL,
+        current_amount INTEGER NOT NULL DEFAULT 0,
+        deadline       TEXT,
+        horizon        TEXT NOT NULL CHECK (horizon IN ('corto','mediano','largo'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_fin_tx_date     ON fin_transactions(date);
+    CREATE INDEX IF NOT EXISTS idx_fin_tx_type     ON fin_transactions(tx_type);
+    CREATE INDEX IF NOT EXISTS idx_fin_tx_category ON fin_transactions(category);
+    CREATE INDEX IF NOT EXISTS idx_fin_recurring_next ON fin_recurring_rules(next_due) WHERE active = 1;
+    CREATE INDEX IF NOT EXISTS idx_fin_budgets_month ON fin_budgets(month);
+    "#,
 ];
 
 pub(crate) fn apply_migrations(conn: &Connection) -> Result<(), DomainError> {

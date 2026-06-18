@@ -1,0 +1,155 @@
+use std::sync::Arc;
+
+use crate::domain::{
+    Budget, Debt, DebtPatch, DomainError, Goal, GoalPatch, MonthlySummary, NewBudget, NewDebt,
+    NewGoal, NewRecurringRule, NewTransaction, RecurringRule, Transaction, TransactionFilter,
+    finance::FinanceRepository,
+};
+
+pub struct FinanceService {
+    repo: Arc<dyn FinanceRepository>,
+}
+
+impl FinanceService {
+    pub fn new(repo: Arc<dyn FinanceRepository>) -> Self {
+        Self { repo }
+    }
+
+    // Transactions
+    pub fn list_transactions(&self, filter: TransactionFilter) -> Result<Vec<Transaction>, DomainError> {
+        self.repo.list_transactions(filter)
+    }
+    pub fn create_transaction(&self, input: NewTransaction) -> Result<Transaction, DomainError> {
+        self.repo.create_transaction(input)
+    }
+    pub fn delete_transaction(&self, id: i64) -> Result<(), DomainError> {
+        self.repo.delete_transaction(id)
+    }
+    pub fn monthly_summary(&self, month: &str) -> Result<MonthlySummary, DomainError> {
+        self.repo.monthly_summary(month)
+    }
+
+    // Recurring
+    pub fn list_recurring_rules(&self) -> Result<Vec<RecurringRule>, DomainError> {
+        self.repo.list_recurring_rules()
+    }
+    pub fn create_recurring_rule(&self, input: NewRecurringRule) -> Result<RecurringRule, DomainError> {
+        self.repo.create_recurring_rule(input)
+    }
+    pub fn deactivate_recurring_rule(&self, id: i64) -> Result<(), DomainError> {
+        self.repo.deactivate_recurring_rule(id)
+    }
+
+    /// Generate all pending recurring transactions up to today.
+    pub fn generate_pending_recurrings(&self, today: &str) -> Result<u32, DomainError> {
+        let mut generated = 0u32;
+        loop {
+            let pending = self.repo.pending_recurring_rules(today)?;
+            if pending.is_empty() { break; }
+            for rule in pending {
+                self.repo.create_transaction(NewTransaction {
+                    amount: rule.amount,
+                    tx_type: rule.tx_type,
+                    category: rule.category.clone(),
+                    description: rule.description.clone(),
+                    date: rule.next_due.clone(),
+                    recurring_id: Some(rule.id),
+                    group_id: rule.group_id,
+                })?;
+                let next = advance_date(&rule.next_due, &rule.period);
+                self.repo.advance_recurring_next_due(rule.id, &next)?;
+                generated += 1;
+            }
+        }
+        Ok(generated)
+    }
+
+    // Budgets
+    pub fn list_budgets(&self, month: &str) -> Result<Vec<Budget>, DomainError> {
+        self.repo.list_budgets(month)
+    }
+    pub fn set_budget(&self, input: NewBudget) -> Result<Budget, DomainError> {
+        self.repo.set_budget(input)
+    }
+    pub fn delete_budget(&self, id: i64) -> Result<(), DomainError> {
+        self.repo.delete_budget(id)
+    }
+    pub fn budget_status(&self, month: &str) -> Result<Vec<(Budget, i64)>, DomainError> {
+        self.repo.budget_status(month)
+    }
+
+    // Debts
+    pub fn list_debts(&self) -> Result<Vec<Debt>, DomainError> {
+        self.repo.list_debts()
+    }
+    pub fn create_debt(&self, input: NewDebt) -> Result<Debt, DomainError> {
+        self.repo.create_debt(input)
+    }
+    pub fn update_debt(&self, id: i64, patch: DebtPatch) -> Result<Debt, DomainError> {
+        self.repo.update_debt(id, patch)
+    }
+    pub fn delete_debt(&self, id: i64) -> Result<(), DomainError> {
+        self.repo.delete_debt(id)
+    }
+
+    // Goals
+    pub fn list_goals(&self) -> Result<Vec<Goal>, DomainError> {
+        self.repo.list_goals()
+    }
+    pub fn create_goal(&self, input: NewGoal) -> Result<Goal, DomainError> {
+        self.repo.create_goal(input)
+    }
+    pub fn update_goal(&self, id: i64, patch: GoalPatch) -> Result<Goal, DomainError> {
+        self.repo.update_goal(id, patch)
+    }
+    pub fn delete_goal(&self, id: i64) -> Result<(), DomainError> {
+        self.repo.delete_goal(id)
+    }
+}
+
+// ponytail: naive date advance, no chrono dep. Breaks on edge months (Feb 30 → clamped by DB).
+// Upgrade to chrono if recurring precision matters.
+fn advance_date(date: &str, period: &crate::domain::RecurringPeriod) -> String {
+    use crate::domain::RecurringPeriod;
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() < 3 { return date.to_string(); }
+    let y: i32 = parts[0].parse().unwrap_or(2026);
+    let m: i32 = parts[1].parse().unwrap_or(1);
+    let d: i32 = parts[2].parse().unwrap_or(1);
+
+    let (ny, nm, nd) = match period {
+        RecurringPeriod::Weekly => add_days(y, m, d, 7),
+        RecurringPeriod::Biweekly => add_days(y, m, d, 14),
+        RecurringPeriod::Monthly => {
+            let mut nm = m + 1;
+            let mut ny = y;
+            if nm > 12 { nm = 1; ny += 1; }
+            let max_d = days_in_month(ny, nm);
+            (ny, nm, d.min(max_d))
+        }
+    };
+    format!("{ny:04}-{nm:02}-{nd:02}")
+}
+
+fn add_days(y: i32, m: i32, d: i32, n: i32) -> (i32, i32, i32) {
+    let mut day = d + n;
+    let mut month = m;
+    let mut year = y;
+    loop {
+        let max = days_in_month(year, month);
+        if day <= max { break; }
+        day -= max;
+        month += 1;
+        if month > 12 { month = 1; year += 1; }
+    }
+    (year, month, day)
+}
+
+fn days_in_month(y: i32, m: i32) -> i32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 29 } else { 28 },
+        _ => 30,
+    }
+}
