@@ -120,6 +120,7 @@ fn run_app(
         tareas_section: TareasSection::default(),
         tareas_filter: ActiveTaskFilter::default(),
         color_mode: detect_color_mode(),
+        visible_panels: cfg.visible_panels,
         services: AppServices::new(storage.clone()),
         agent_child: None,
         agent_stdin: None,
@@ -244,13 +245,13 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         KeyCode::Tab if key.modifiers == KeyModifiers::NONE => {
             state.pending_g = false;
             state.notes_pending_g = false;
-            state.app = jinx::app::reduce(state.app.clone(), AppEvent::Key(key));
+            state.app.focused_panel = state.app.focused_panel.next_visible(&state.visible_panels);
             return;
         }
         KeyCode::BackTab => {
             state.pending_g = false;
             state.notes_pending_g = false;
-            state.app = jinx::app::reduce(state.app.clone(), AppEvent::Key(key));
+            state.app.focused_panel = state.app.focused_panel.prev_visible(&state.visible_panels);
             return;
         }
         _ => {}
@@ -335,19 +336,23 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
             }
         }
         MouseEventKind::Down(_) => {
-            // ponytail: equal-width tab hit detection, good enough
+            // ponytail: equal-width tab hit detection over visible panels
             if row < 3 {
-                let width = state.panel_area.map(|r| r.width).unwrap_or(80);
-                let tab_width = width / 5;
-                if tab_width > 0 {
-                    let idx = col.saturating_sub(1) / tab_width;
-                    state.app.focused_panel = match idx.min(4) {
-                        0 => Panel::Chat,
-                        1 => Panel::Tareas,
-                        2 => Panel::Calendario,
-                        3 => Panel::Notas,
-                        _ => Panel::Finanzas,
-                    };
+                let visible_panels: Vec<Panel> = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas, Panel::Finanzas]
+                    .iter().enumerate()
+                    .filter(|(i, _)| state.visible_panels[*i])
+                    .map(|(_, p)| *p)
+                    .collect();
+                let n = visible_panels.len() as u16;
+                if n > 0 {
+                    let width = state.panel_area.map(|r| r.width).unwrap_or(80);
+                    let tab_width = width / n;
+                    if tab_width > 0 {
+                        let idx = (col.saturating_sub(1) / tab_width) as usize;
+                        if let Some(&panel) = visible_panels.get(idx.min(visible_panels.len() - 1)) {
+                            state.app.focused_panel = panel;
+                        }
+                    }
                 }
             }
         }
@@ -439,21 +444,24 @@ fn render(frame: &mut ratatui::Frame, state: &mut RuntimeState) {
 }
 
 fn render_tabs(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let active = match state.app.focused_panel {
-        Panel::Chat => 0,
-        Panel::Tareas => 1,
-        Panel::Calendario => 2,
-        Panel::Notas => 3,
-        Panel::Finanzas => 4,
-    };
-    let tabs = Tabs::new(vec![
+    let all_labels = [
         format!("  {}  ", state.locale.panels.chat),
         format!("  {}  ", state.locale.panels.tasks),
         format!("  {}  ", state.locale.panels.calendar),
         format!("  {}  ", state.locale.panels.notes),
         "  Finanzas  ".to_string(),
-    ])
-        .select(active)
+    ];
+    let visible_labels: Vec<String> = all_labels.iter().enumerate()
+        .filter(|(i, _)| state.visible_panels[*i])
+        .map(|(_, l)| l.clone())
+        .collect();
+    let active_idx = all_labels.iter().enumerate()
+        .filter(|(i, _)| state.visible_panels[*i])
+        .position(|(i, _)| i == state.app.focused_panel.index())
+        .unwrap_or(0);
+
+    let tabs = Tabs::new(visible_labels)
+        .select(active_idx)
         .block(Block::default().borders(Borders::ALL))
         .style(Style::default().fg(Color::DarkGray))
         .highlight_style(

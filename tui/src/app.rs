@@ -25,7 +25,7 @@ pub enum Panel {
 static CYCLE: [Panel; 5] = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas, Panel::Finanzas];
 
 impl Panel {
-    fn index(self) -> usize {
+    pub fn index(self) -> usize {
         match self {
             Self::Chat => 0,
             Self::Tareas => 1,
@@ -47,6 +47,24 @@ impl Panel {
     /// Advance focus backward (Shift+Tab).
     pub fn prev(self) -> Self {
         Self::from_index(self.index() + CYCLE.len() - 1)
+    }
+
+    pub fn next_visible(self, vis: &[bool; 5]) -> Self {
+        let mut i = self.index();
+        for _ in 0..CYCLE.len() {
+            i = (i + 1) % CYCLE.len();
+            if vis[i] { return CYCLE[i]; }
+        }
+        self
+    }
+
+    pub fn prev_visible(self, vis: &[bool; 5]) -> Self {
+        let mut i = self.index();
+        for _ in 0..CYCLE.len() {
+            i = (i + CYCLE.len() - 1) % CYCLE.len();
+            if vis[i] { return CYCLE[i]; }
+        }
+        self
     }
 }
 

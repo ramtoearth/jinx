@@ -141,7 +141,7 @@ impl GroupFormState {
 
 #[derive(Default, Clone)]
 pub(crate) struct SettingsFormState {
-    pub(crate) field: usize,              // 0=language, 1=provider, 2=model|backend, 3=host|model
+    pub(crate) field: usize,              // 0=language, 1=provider, 2=model|backend, 3=host|model, 4=panels
     pub(crate) language_idx: usize,       // 0=English, 1=Español
     pub(crate) provider_idx: usize,       // 0=Local, 1=Remote
     pub(crate) backend_idx: usize,        // 0=Bedrock, 1=OpenAI, 2=Anthropic, 3=Gemini, 4=LlamaAPI
@@ -152,6 +152,8 @@ pub(crate) struct SettingsFormState {
     pub(crate) anthropic_model_input: TextEditor,
     pub(crate) gemini_model_input: TextEditor,
     pub(crate) llamaapi_model_input: TextEditor,
+    pub(crate) panel_sel: [bool; 5],
+    pub(crate) panel_cursor: usize,
 }
 
 #[derive(Clone)]
@@ -779,6 +781,7 @@ pub(crate) struct RuntimeState {
     pub(crate) tareas_section: TareasSection,
     pub(crate) tareas_filter: ActiveTaskFilter,
     pub(crate) color_mode: ColorMode,
+    pub(crate) visible_panels: [bool; 5],
     pub(crate) services: AppServices,
     pub(crate) agent_child: Option<Child>,
     pub(crate) agent_stdin: Option<ChildStdin>,

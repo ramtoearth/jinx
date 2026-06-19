@@ -58,6 +58,12 @@ pub struct Config {
     pub remote: RemoteConfig,
     #[serde(default)]
     pub last_export_dir: Option<String>,
+    #[serde(default = "default_visible_panels")]
+    pub visible_panels: [bool; 5],
+}
+
+fn default_visible_panels() -> [bool; 5] {
+    [true; 5]
 }
 
 fn default_language() -> String {
@@ -86,6 +92,7 @@ impl Default for Config {
                 llamaapi_model: "Llama-4-Maverick-17B-128E-Instruct-FP8".to_string(),
             },
             last_export_dir: None,
+            visible_panels: [true; 5],
         }
     }
 }
