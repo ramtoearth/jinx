@@ -461,7 +461,7 @@ pub(crate) fn render_debt_form(frame: &mut ratatui::Frame, state: &RuntimeState,
     let mut lines = vec![
         super::form_line("Acreedor", form.creditor.clone(), form.field == 0),
         super::form_line("Monto total", form.total_amount.clone(), form.field == 1),
-        super::form_line("Tasa interés %", form.interest_rate.clone(), form.field == 2),
+        super::form_line("Tasa interés %", if form.interest_rate.is_empty() && form.field != 2 { "(opcional)".to_string() } else { form.interest_rate.clone() }, form.field == 2),
         super::form_line("Pago mensual", form.monthly_payment.clone(), form.field == 3),
         super::form_line("Día vencimiento", form.due_day.clone(), form.field == 4),
         date_input_line(
