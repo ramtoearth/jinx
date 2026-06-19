@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::{
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
+    event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -70,7 +70,7 @@ fn main() -> io::Result<()> {
     // -- Terminal setup ----------------------------------------------------
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -78,7 +78,7 @@ fn main() -> io::Result<()> {
 
     // -- Cleanup -----------------------------------------------------------
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableBracketedPaste)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableBracketedPaste, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {
@@ -334,6 +334,23 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
                 _ => { state.chat_scroll = state.chat_scroll.saturating_sub(3); }
             }
         }
+        MouseEventKind::Down(_) => {
+            // ponytail: equal-width tab hit detection, good enough
+            if row < 3 {
+                let width = state.panel_area.map(|r| r.width).unwrap_or(80);
+                let tab_width = width / 5;
+                if tab_width > 0 {
+                    let idx = col.saturating_sub(1) / tab_width;
+                    state.app.focused_panel = match idx.min(4) {
+                        0 => Panel::Chat,
+                        1 => Panel::Tareas,
+                        2 => Panel::Calendario,
+                        3 => Panel::Notas,
+                        _ => Panel::Finanzas,
+                    };
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -341,6 +358,22 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
 fn handle_paste(state: &mut RuntimeState, data: String) {
     if state.app.modal.is_some() {
         handle_modal_paste(state, &data);
+        return;
+    }
+    if state.app.focused_panel == Panel::Notas && state.notes_view == NotesView::Edit {
+        for c in data.chars() {
+            if c == '\n' || c == '\r' {
+                if state.notes_title_focused {
+                    state.notes_title_editor.insert_char(' ');
+                } else {
+                    state.notes_editor.insert_newline();
+                }
+            } else if state.notes_title_focused {
+                state.notes_title_editor.insert_char(c);
+            } else {
+                state.notes_editor.insert_char(c);
+            }
+        }
         return;
     }
     if state.app.focused_panel != Panel::Chat {
