@@ -335,23 +335,20 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
                 _ => { state.chat_scroll = state.chat_scroll.saturating_sub(3); }
             }
         }
-        MouseEventKind::Down(_) => {
+        MouseEventKind::Down(_) if row < 3 => {
             // ponytail: equal-width tab hit detection over visible panels
-            if row < 3 {
-                let visible_panels: Vec<Panel> = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas, Panel::Finanzas]
-                    .iter().enumerate()
-                    .filter(|(i, _)| state.visible_panels[*i])
-                    .map(|(_, p)| *p)
-                    .collect();
-                let n = visible_panels.len() as u16;
-                if n > 0 {
-                    let width = state.panel_area.map(|r| r.width).unwrap_or(80);
-                    let tab_width = width / n;
-                    if tab_width > 0 {
-                        let idx = (col.saturating_sub(1) / tab_width) as usize;
-                        if let Some(&panel) = visible_panels.get(idx.min(visible_panels.len() - 1)) {
-                            state.app.focused_panel = panel;
-                        }
+            let visible_panels: Vec<Panel> = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas, Panel::Finanzas]
+                .iter().enumerate()
+                .filter(|(i, _)| state.visible_panels[*i])
+                .map(|(_, p)| *p)
+                .collect();
+            let n = visible_panels.len() as u16;
+            let width = state.panel_area.map(|r| r.width).unwrap_or(80);
+            if let Some(tab_width) = width.checked_div(n) {
+                if let Some(idx) = col.saturating_sub(1).checked_div(tab_width) {
+                    let idx = idx as usize;
+                    if let Some(&panel) = visible_panels.get(idx.min(visible_panels.len().saturating_sub(1))) {
+                        state.app.focused_panel = panel;
                     }
                 }
             }

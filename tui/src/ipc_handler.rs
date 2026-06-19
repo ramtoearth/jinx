@@ -4,9 +4,9 @@
 //! This module runs in the IPC reader thread (see `main.rs` startup).
 
 use jinx_core::{
-    AppServices, DebtPatch, DomainError, EventPatch, GoalPatch, HexColor, NewBudget, NewCategory,
-    NewDebt, NewEvent, NewGoal, NewGroup, NewNote, NewRecurringRule, NewTask, NewTransaction,
-    NotePatch, Priority, TaskFilter, TaskPatch, TaskStatus, TransactionFilter,
+    AppServices, DebtPatch, DomainError, EventPatch, GoalPatch, HexColor, NewBudget, NewDebt,
+    NewEvent, NewGoal, NewGroup, NewNote, NewRecurringRule, NewTask, NewTransaction, NotePatch,
+    Priority, TaskFilter, TaskPatch, TaskStatus, TransactionFilter,
 };
 
 use crate::ipc::{

@@ -273,12 +273,7 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> AppState {
 // ---------------------------------------------------------------------------
 
 fn dispatch_panel_key(state: &mut AppState, key: KeyEvent) {
-    match state.focused_panel {
-        Panel::Tareas => {
-            if let KeyCode::Char('n') = key.code {
-                state.modal = Some(Modal::NewTask);
-            }
-        }
-        _ => {}
+    if state.focused_panel == Panel::Tareas && key.code == KeyCode::Char('n') {
+        state.modal = Some(Modal::NewTask);
     }
 }
