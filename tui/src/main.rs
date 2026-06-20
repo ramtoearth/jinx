@@ -171,6 +171,9 @@ fn run_app(
     // Spawn agent
     spawn_agent(&mut state);
 
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let _ = state.services.finance.generate_pending_recurrings(&today);
+
     let tick = Duration::from_millis(250);
     let timeout_dur = Duration::from_secs(30);
     let mut last_tick = Instant::now();

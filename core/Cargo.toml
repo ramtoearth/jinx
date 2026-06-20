@@ -10,6 +10,7 @@ name = "jinx_core"
 
 [dependencies]
 serde = { workspace = true }
+chrono = { workspace = true }
 thiserror = { workspace = true }
 rusqlite = { workspace = true }
 directories = { workspace = true }

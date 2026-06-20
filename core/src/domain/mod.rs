@@ -13,7 +13,7 @@ pub use finance::{
 };
 pub use group::{Group, GroupInfo, GroupPatch, GroupRepository, GroupsSnapshot, NewGroup};
 pub use note::{NewNote, Note, NoteRepository, NotePatch};
-pub use shared::HexColor;
+pub use shared::{HexColor, days_in_month};
 pub use task::{
     NewTask, Priority, Task, TaskFilter, TaskPatch, TaskRepository, TaskStatus,
 };

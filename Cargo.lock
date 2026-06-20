@@ -488,6 +488,7 @@ dependencies = [
 name = "jinx-core"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "directories",
  "proptest",
  "rusqlite",

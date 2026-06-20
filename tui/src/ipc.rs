@@ -392,23 +392,8 @@ pub struct ShutdownPayload {}
 // Shared domain vocabulary used by storage payloads
 // ---------------------------------------------------------------------------
 
-/// Task priority, matching the Almacén CHECK constraint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Priority {
-    Alta,
-    Media,
-    Baja,
-}
-
-/// Task status, matching the Almacén CHECK constraint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TaskStatus {
-    Pendiente,
-    Completada,
-    Cancelada,
-}
+pub use jinx_core::Priority;
+pub use jinx_core::TaskStatus;
 
 // ---------------------------------------------------------------------------
 // Storage DTOs (Tasks, Events, Groups)

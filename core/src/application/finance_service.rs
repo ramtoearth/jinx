@@ -118,49 +118,15 @@ impl FinanceService {
     }
 }
 
-// ponytail: naive date advance, no chrono dep. Breaks on edge months (Feb 30 → clamped by DB).
-// Upgrade to chrono if recurring precision matters.
 fn advance_date(date: &str, period: &crate::domain::RecurringPeriod) -> String {
+    use chrono::{NaiveDate, Days, Months};
     use crate::domain::RecurringPeriod;
-    let parts: Vec<&str> = date.split('-').collect();
-    if parts.len() < 3 { return date.to_string(); }
-    let y: i32 = parts[0].parse().unwrap_or(2026);
-    let m: i32 = parts[1].parse().unwrap_or(1);
-    let d: i32 = parts[2].parse().unwrap_or(1);
-
-    let (ny, nm, nd) = match period {
-        RecurringPeriod::Weekly => add_days(y, m, d, 7),
-        RecurringPeriod::Biweekly => add_days(y, m, d, 14),
-        RecurringPeriod::Monthly => {
-            let mut nm = m + 1;
-            let mut ny = y;
-            if nm > 12 { nm = 1; ny += 1; }
-            let max_d = days_in_month(ny, nm);
-            (ny, nm, d.min(max_d))
-        }
+    let d = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .unwrap_or(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap());
+    let next = match period {
+        RecurringPeriod::Weekly => d + Days::new(7),
+        RecurringPeriod::Biweekly => d + Days::new(14),
+        RecurringPeriod::Monthly => d + Months::new(1),
     };
-    format!("{ny:04}-{nm:02}-{nd:02}")
-}
-
-fn add_days(y: i32, m: i32, d: i32, n: i32) -> (i32, i32, i32) {
-    let mut day = d + n;
-    let mut month = m;
-    let mut year = y;
-    loop {
-        let max = days_in_month(year, month);
-        if day <= max { break; }
-        day -= max;
-        month += 1;
-        if month > 12 { month = 1; year += 1; }
-    }
-    (year, month, day)
-}
-
-fn days_in_month(y: i32, m: i32) -> i32 {
-    match m {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 29 } else { 28 },
-        _ => 30,
-    }
+    next.format("%Y-%m-%d").to_string()
 }

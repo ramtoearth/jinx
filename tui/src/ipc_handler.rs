@@ -6,7 +6,7 @@
 use jinx_core::{
     AppServices, DebtPatch, DomainError, EventPatch, GoalPatch, HexColor, NewBudget, NewDebt,
     NewEvent, NewGoal, NewGroup, NewNote, NewRecurringRule, NewTask, NewTransaction, NotePatch,
-    Priority, TaskFilter, TaskPatch, TaskStatus, TransactionFilter,
+    TaskFilter, TaskPatch, TransactionFilter,
 };
 
 use crate::ipc::{
@@ -34,20 +34,11 @@ use crate::ipc::{
 // ---------------------------------------------------------------------------
 
 fn task_to_dto(t: jinx_core::Task) -> StorageTaskDto {
-    use crate::ipc::{Priority as IpcPriority, TaskStatus as IpcTaskStatus};
     StorageTaskDto {
         id: t.id,
         title: t.title,
-        priority: match t.priority {
-            Priority::Alta => IpcPriority::Alta,
-            Priority::Media => IpcPriority::Media,
-            Priority::Baja => IpcPriority::Baja,
-        },
-        status: match t.status {
-            TaskStatus::Pendiente => IpcTaskStatus::Pendiente,
-            TaskStatus::Completada => IpcTaskStatus::Completada,
-            TaskStatus::Cancelada => IpcTaskStatus::Cancelada,
-        },
+        priority: t.priority,
+        status: t.status,
         created_at: t.created_at,
         deadline: t.deadline,
         group_id: t.group_id,
@@ -157,13 +148,8 @@ pub fn handle_storage_request(
                 .unwrap_or(None)
                 .unwrap_or(None)
                 .unwrap_or_default();
-            use crate::ipc::TaskStatus as IpcStatus;
             let filter = TaskFilter {
-                status: req.status.map(|s| match s {
-                    IpcStatus::Pendiente => TaskStatus::Pendiente,
-                    IpcStatus::Completada => TaskStatus::Completada,
-                    IpcStatus::Cancelada => TaskStatus::Cancelada,
-                }),
+                status: req.status,
                 group_id: req.group_id,
                 from_date: req.from_date,
                 to_date: req.to_date,
@@ -201,14 +187,9 @@ pub fn handle_storage_request(
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
-                    use crate::ipc::Priority as IpcPriority;
                     let input = NewTask {
                         title: r.title,
-                        priority: r.priority.map(|p| match p {
-                            IpcPriority::Alta => Priority::Alta,
-                            IpcPriority::Media => Priority::Media,
-                            IpcPriority::Baja => Priority::Baja,
-                        }),
+                        priority: r.priority,
                         deadline: r.deadline,
                         group_id: r.group_id,
                     };
@@ -228,19 +209,10 @@ pub fn handle_storage_request(
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
-                    use crate::ipc::{Priority as IpcPriority, TaskStatus as IpcStatus};
                     let patch = TaskPatch {
                         title: r.patch.title,
-                        priority: r.patch.priority.map(|p| match p {
-                            IpcPriority::Alta => Priority::Alta,
-                            IpcPriority::Media => Priority::Media,
-                            IpcPriority::Baja => Priority::Baja,
-                        }),
-                        status: r.patch.status.map(|s| match s {
-                            IpcStatus::Pendiente => TaskStatus::Pendiente,
-                            IpcStatus::Completada => TaskStatus::Completada,
-                            IpcStatus::Cancelada => TaskStatus::Cancelada,
-                        }),
+                        priority: r.patch.priority,
+                        status: r.patch.status,
                         deadline: r.patch.deadline,
                         group_id: r.patch.group_id,
                     };
