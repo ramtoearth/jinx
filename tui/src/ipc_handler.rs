@@ -3,13 +3,11 @@
 //!
 //! This module runs in the IPC reader thread (see `main.rs` startup).
 
-use std::sync::Arc;
-
 use jinx_core::{
-    DomainError, EventPatch, HexColor, NewEvent, NewGroup, NewNote, NewTask, NotePatch, Priority,
-    TaskFilter, TaskPatch, TaskStatus,
+    AppServices, DebtPatch, DomainError, EventPatch, GoalPatch, HexColor, NewBudget, NewDebt,
+    NewEvent, NewGoal, NewGroup, NewNote, NewRecurringRule, NewTask, NewTransaction, NotePatch,
+    TaskFilter, TaskPatch, TransactionFilter,
 };
-use jinx_core::SqliteStorage;
 
 use crate::ipc::{
     Envelope, Kind, MessageType, StorageCompleteTaskRequest, StorageCompleteTaskResponse,
@@ -36,20 +34,11 @@ use crate::ipc::{
 // ---------------------------------------------------------------------------
 
 fn task_to_dto(t: jinx_core::Task) -> StorageTaskDto {
-    use crate::ipc::{Priority as IpcPriority, TaskStatus as IpcTaskStatus};
     StorageTaskDto {
         id: t.id,
         title: t.title,
-        priority: match t.priority {
-            Priority::Alta => IpcPriority::Alta,
-            Priority::Media => IpcPriority::Media,
-            Priority::Baja => IpcPriority::Baja,
-        },
-        status: match t.status {
-            TaskStatus::Pendiente => IpcTaskStatus::Pendiente,
-            TaskStatus::Completada => IpcTaskStatus::Completada,
-            TaskStatus::Cancelada => IpcTaskStatus::Cancelada,
-        },
+        priority: t.priority,
+        status: t.status,
         created_at: t.created_at,
         deadline: t.deadline,
         group_id: t.group_id,
@@ -92,6 +81,51 @@ fn domain_err_to_ipc(e: DomainError) -> IpcError {
     }
 }
 
+fn category_to_dto(c: jinx_core::FinCategory) -> crate::ipc::FinanceCategoryDto {
+    crate::ipc::FinanceCategoryDto {
+        id: c.id, name: c.name, tx_type: c.tx_type.map(|t| t.as_str().to_string()),
+    }
+}
+
+fn tx_to_dto(t: jinx_core::Transaction) -> crate::ipc::FinanceTransactionDto {
+    crate::ipc::FinanceTransactionDto {
+        id: t.id, amount: t.amount, tx_type: t.tx_type.as_str().to_string(),
+        category_id: t.category_id, description: t.description, date: t.date,
+        recurring_id: t.recurring_id,
+    }
+}
+
+fn recurring_to_dto(r: jinx_core::RecurringRule) -> crate::ipc::FinanceRecurringRuleDto {
+    crate::ipc::FinanceRecurringRuleDto {
+        id: r.id, amount: r.amount, tx_type: r.tx_type.as_str().to_string(),
+        category_id: r.category_id, description: r.description,
+        period: r.period.as_str().to_string(), day_of_month: r.day_of_month,
+        next_due: r.next_due, active: r.active,
+    }
+}
+
+fn budget_to_dto(b: jinx_core::Budget) -> crate::ipc::FinanceBudgetDto {
+    crate::ipc::FinanceBudgetDto {
+        id: b.id, category_id: b.category_id, monthly_limit: b.monthly_limit, month: b.month,
+    }
+}
+
+fn debt_to_dto(d: jinx_core::Debt) -> crate::ipc::FinanceDebtDto {
+    crate::ipc::FinanceDebtDto {
+        id: d.id, creditor: d.creditor, total_amount: d.total_amount,
+        remaining_amount: d.remaining_amount, interest_rate: d.interest_rate,
+        monthly_payment: d.monthly_payment, due_day: d.due_day, start_date: d.start_date,
+    }
+}
+
+fn goal_to_dto(g: jinx_core::Goal) -> crate::ipc::FinanceGoalDto {
+    crate::ipc::FinanceGoalDto {
+        id: g.id, name: g.name, target_amount: g.target_amount,
+        current_amount: g.current_amount, deadline: g.deadline,
+        horizon: g.horizon.as_str().to_string(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Dispatcher
 // ---------------------------------------------------------------------------
@@ -99,12 +133,8 @@ fn domain_err_to_ipc(e: DomainError) -> IpcError {
 /// Handle a single `storage.*` request envelope and return a response envelope.
 pub fn handle_storage_request(
     envelope: &Envelope,
-    storage: &Arc<SqliteStorage>,
+    services: &AppServices,
 ) -> Envelope {
-    use jinx_core::task::TaskRepository;
-    use jinx_core::calendar::EventRepository;
-    use jinx_core::group::GroupRepository;
-    use jinx_core::note::NoteRepository;
     let response_base = Envelope::new_empty(Kind::Response, envelope.message_type)
         .with_ref(envelope.id);
 
@@ -118,19 +148,14 @@ pub fn handle_storage_request(
                 .unwrap_or(None)
                 .unwrap_or(None)
                 .unwrap_or_default();
-            use crate::ipc::TaskStatus as IpcStatus;
             let filter = TaskFilter {
-                status: req.status.map(|s| match s {
-                    IpcStatus::Pendiente => TaskStatus::Pendiente,
-                    IpcStatus::Completada => TaskStatus::Completada,
-                    IpcStatus::Cancelada => TaskStatus::Cancelada,
-                }),
+                status: req.status,
                 group_id: req.group_id,
                 from_date: req.from_date,
                 to_date: req.to_date,
                 no_deadline: false,
             };
-            match storage.list_tasks(filter) {
+            match services.tasks.list(filter) {
                 Ok(tasks) => response_base.clone()
                     .with_payload(&StorageListTasksResponse {
                         tasks: tasks.into_iter().map(task_to_dto).collect(),
@@ -145,7 +170,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.search_tasks(&r.query) {
+                Some(r) => match services.tasks.search(&r.query) {
                     Ok(tasks) => response_base.clone()
                         .with_payload(&StorageSearchTasksResponse {
                             tasks: tasks.into_iter().map(task_to_dto).collect(),
@@ -162,18 +187,13 @@ pub fn handle_storage_request(
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
-                    use crate::ipc::Priority as IpcPriority;
                     let input = NewTask {
                         title: r.title,
-                        priority: r.priority.map(|p| match p {
-                            IpcPriority::Alta => Priority::Alta,
-                            IpcPriority::Media => Priority::Media,
-                            IpcPriority::Baja => Priority::Baja,
-                        }),
+                        priority: r.priority,
                         deadline: r.deadline,
                         group_id: r.group_id,
                     };
-                    match storage.create_task(input) {
+                    match services.tasks.create(input) {
                         Ok(t) => response_base.clone()
                             .with_payload(&StorageCreateTaskResponse { task: task_to_dto(t) })
                             .unwrap_or(response_base),
@@ -189,23 +209,14 @@ pub fn handle_storage_request(
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
-                    use crate::ipc::{Priority as IpcPriority, TaskStatus as IpcStatus};
                     let patch = TaskPatch {
                         title: r.patch.title,
-                        priority: r.patch.priority.map(|p| match p {
-                            IpcPriority::Alta => Priority::Alta,
-                            IpcPriority::Media => Priority::Media,
-                            IpcPriority::Baja => Priority::Baja,
-                        }),
-                        status: r.patch.status.map(|s| match s {
-                            IpcStatus::Pendiente => TaskStatus::Pendiente,
-                            IpcStatus::Completada => TaskStatus::Completada,
-                            IpcStatus::Cancelada => TaskStatus::Cancelada,
-                        }),
+                        priority: r.patch.priority,
+                        status: r.patch.status,
                         deadline: r.patch.deadline,
                         group_id: r.patch.group_id,
                     };
-                    match storage.update_task(r.id, patch) {
+                    match services.tasks.update(r.id, patch) {
                         Ok(t) => response_base.clone()
                             .with_payload(&StorageUpdateTaskResponse { task: task_to_dto(t) })
                             .unwrap_or(response_base),
@@ -220,7 +231,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.complete_task(r.id) {
+                Some(r) => match services.tasks.complete(r.id) {
                     Ok(t) => response_base.clone()
                         .with_payload(&StorageCompleteTaskResponse { task: task_to_dto(t) })
                         .unwrap_or(response_base),
@@ -234,7 +245,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.delete_task(r.id) {
+                Some(r) => match services.tasks.delete(r.id) {
                     Ok(()) => response_base.clone()
                         .with_payload(&StorageDeleteTaskResponse {})
                         .unwrap_or(response_base),
@@ -252,7 +263,7 @@ pub fn handle_storage_request(
                 .unwrap_or(None)
                 .unwrap_or(None)
                 .unwrap_or_default();
-            match storage.list_events(req.from_date.as_deref(), req.to_date.as_deref()) {
+            match services.calendar.list(req.from_date.as_deref(), req.to_date.as_deref()) {
                 Ok(events) => response_base.clone()
                     .with_payload(&StorageListEventsResponse {
                         events: events.into_iter().map(event_to_dto).collect(),
@@ -275,7 +286,7 @@ pub fn handle_storage_request(
                         duration_minutes: r.duration_minutes,
                         group_id: r.group_id,
                     };
-                    match storage.create_event(input) {
+                    match services.calendar.create(input) {
                         Ok(e) => response_base.clone()
                             .with_payload(&StorageCreateEventResponse { event: event_to_dto(e) })
                             .unwrap_or(response_base),
@@ -298,7 +309,7 @@ pub fn handle_storage_request(
                         duration_minutes: r.patch.duration_minutes,
                         group_id: r.patch.group_id,
                     };
-                    match storage.update_event(r.id, patch) {
+                    match services.calendar.update(r.id, patch) {
                         Ok(e) => response_base.clone()
                             .with_payload(&StorageUpdateEventResponse { event: event_to_dto(e) })
                             .unwrap_or(response_base),
@@ -313,7 +324,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.delete_event(r.id) {
+                Some(r) => match services.calendar.delete(r.id) {
                     Ok(()) => response_base.clone()
                         .with_payload(&StorageDeleteEventResponse {})
                         .unwrap_or(response_base),
@@ -326,7 +337,7 @@ pub fn handle_storage_request(
         // Groups
         // ------------------------------------------------------------------
         MessageType::StorageListGroups => {
-            match storage.list_groups() {
+            match services.groups.list() {
                 Ok(groups) => response_base.clone()
                     .with_payload(&StorageListGroupsResponse {
                         groups: groups.into_iter().map(group_to_dto).collect(),
@@ -344,7 +355,7 @@ pub fn handle_storage_request(
                 Some(r) => {
                     match HexColor::new(r.color) {
                         Err(msg) => response_base.with_error(IpcError::new("VALIDATION_FAILED", msg)),
-                        Ok(color) => match storage.create_group(NewGroup { name: r.name, color }) {
+                        Ok(color) => match services.groups.create(NewGroup { name: r.name, color }) {
                             Ok(g) => response_base.clone()
                                 .with_payload(&StorageCreateGroupResponse { group: group_to_dto(g) })
                                 .unwrap_or(response_base),
@@ -360,7 +371,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.rename_group(r.id, r.name) {
+                Some(r) => match services.groups.rename(r.id, r.name) {
                     Ok(g) => response_base.clone()
                         .with_payload(&StorageRenameGroupResponse { group: group_to_dto(g) })
                         .unwrap_or(response_base),
@@ -377,7 +388,7 @@ pub fn handle_storage_request(
                 Some(r) => {
                     match HexColor::new(r.color) {
                         Err(msg) => response_base.with_error(IpcError::new("VALIDATION_FAILED", msg)),
-                        Ok(color) => match storage.recolor_group(r.id, color) {
+                        Ok(color) => match services.groups.recolor(r.id, color) {
                             Ok(g) => response_base.clone()
                                 .with_payload(&StorageRecolorGroupResponse { group: group_to_dto(g) })
                                 .unwrap_or(response_base),
@@ -393,7 +404,7 @@ pub fn handle_storage_request(
                 envelope.payload_as().unwrap_or(None).unwrap_or(None);
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
-                Some(r) => match storage.delete_group(r.id) {
+                Some(r) => match services.groups.delete(r.id) {
                     Ok(()) => response_base.clone()
                         .with_payload(&StorageDeleteGroupResponse {})
                         .unwrap_or(response_base),
@@ -412,7 +423,7 @@ pub fn handle_storage_request(
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
                     let path = std::path::Path::new(&r.output_path);
-                    match storage.export_markdown(path) {
+                    match services.export.export_markdown(path) {
                         Ok(p) => response_base.clone()
                             .with_payload(&StorageExportMarkdownResponse {
                                 written_path: p.to_string_lossy().to_string(),
@@ -431,7 +442,7 @@ pub fn handle_storage_request(
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
                     let path = std::path::Path::new(&r.output_path);
-                    match storage.export_sqlite(path) {
+                    match services.export.export_sqlite(path) {
                         Ok(p) => response_base.clone()
                             .with_payload(&StorageExportSqliteResponse {
                                 written_path: p.to_string_lossy().to_string(),
@@ -447,7 +458,7 @@ pub fn handle_storage_request(
         // Notes
         // ------------------------------------------------------------------
         MessageType::StorageListNotes => {
-            match storage.list_notes() {
+            match services.notes.list() {
                 Ok(notes) => response_base.clone()
                     .with_payload(&StorageListNotesResponse {
                         notes: notes.into_iter().map(note_to_dto).collect(),
@@ -463,7 +474,7 @@ pub fn handle_storage_request(
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
-                    match storage.search_notes(&r.query) {
+                    match services.notes.search(&r.query) {
                         Ok(notes) => response_base.clone()
                             .with_payload(&StorageSearchNotesResponse {
                                 notes: notes.into_iter().map(note_to_dto).collect(),
@@ -485,7 +496,7 @@ pub fn handle_storage_request(
                         title: r.title,
                         body: r.body,
                     };
-                    match storage.create_note(input) {
+                    match services.notes.create(input) {
                         Ok(n) => response_base.clone()
                             .with_payload(&StorageCreateNoteResponse { note: note_to_dto(n) })
                             .unwrap_or(response_base),
@@ -505,7 +516,7 @@ pub fn handle_storage_request(
                         title: r.patch.title,
                         body: r.patch.body,
                     };
-                    match storage.update_note(r.id, patch) {
+                    match services.notes.update(r.id, patch) {
                         Ok(n) => response_base.clone()
                             .with_payload(&StorageUpdateNoteResponse { note: note_to_dto(n) })
                             .unwrap_or(response_base),
@@ -521,7 +532,7 @@ pub fn handle_storage_request(
             match req {
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
-                    match storage.delete_note(r.id) {
+                    match services.notes.delete(r.id) {
                         Ok(()) => response_base.clone()
                             .with_payload(&StorageDeleteNoteResponse {})
                             .unwrap_or(response_base),
@@ -538,7 +549,7 @@ pub fn handle_storage_request(
                 None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
                 Some(r) => {
                     let path = std::path::Path::new(&r.output_path);
-                    match storage.export_note(r.id, path) {
+                    match services.notes.export(r.id, path) {
                         Ok(p) => response_base.clone()
                             .with_payload(&StorageExportNoteResponse {
                                 written_path: p.to_string_lossy().to_string(),
@@ -547,6 +558,354 @@ pub fn handle_storage_request(
                         Err(e) => response_base.with_error(domain_err_to_ipc(e)),
                     }
                 }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Finance — Categories
+        // ------------------------------------------------------------------
+        MessageType::FinanceListCategories => {
+            let req: crate::ipc::FinanceListCategoriesRequest = envelope
+                .payload_as().unwrap_or(None).unwrap_or(None)
+                .unwrap_or(crate::ipc::FinanceListCategoriesRequest { tx_type: None });
+            let tx_type = req.tx_type.as_deref().and_then(|s| s.parse().ok());
+            match services.finance.list_categories(tx_type) {
+                Ok(cats) => response_base.clone()
+                    .with_payload(&crate::ipc::FinanceListCategoriesResponse {
+                        categories: cats.into_iter().map(category_to_dto).collect(),
+                    }).unwrap_or(response_base),
+                Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+            }
+        }
+
+        MessageType::FinanceCreateCategory => {
+            let req: Option<crate::ipc::FinanceCreateCategoryRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => {
+                    let tx_type = r.tx_type.as_deref().and_then(|s| s.parse().ok());
+                    match services.finance.create_category(jinx_core::NewCategory {
+                        name: r.name, tx_type,
+                    }) {
+                        Ok(c) => response_base.clone()
+                            .with_payload(&crate::ipc::FinanceCreateCategoryResponse { category: category_to_dto(c) })
+                            .unwrap_or(response_base),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                    }
+                }
+            }
+        }
+
+        MessageType::FinanceDeleteCategory => {
+            let req: Option<crate::ipc::FinanceDeleteCategoryRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.delete_category(r.id) {
+                    Ok(_) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceDeleteCategoryResponse {})
+                        .unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Finance — Transactions
+        // ------------------------------------------------------------------
+        MessageType::FinanceListTransactions => {
+            let req: crate::ipc::FinanceListTransactionsRequest = envelope
+                .payload_as().unwrap_or(None).unwrap_or(None).unwrap_or_default();
+            let filter = TransactionFilter {
+                tx_type: req.tx_type.as_deref().and_then(|s| s.parse().ok()),
+                category_id: req.category_id,
+                from_date: req.from_date,
+                to_date: req.to_date,
+            };
+            match services.finance.list_transactions(filter) {
+                Ok(txs) => response_base.clone()
+                    .with_payload(&crate::ipc::FinanceListTransactionsResponse {
+                        transactions: txs.into_iter().map(tx_to_dto).collect(),
+                    }).unwrap_or(response_base),
+                Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+            }
+        }
+
+        MessageType::FinanceCreateTransaction => {
+            let req: Option<crate::ipc::FinanceCreateTransactionRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => {
+                    let tx_type = match r.tx_type.parse() {
+                        Ok(t) => t,
+                        Err(_) => return response_base.with_error(IpcError::new("VALIDATION_FAILED", "invalid tx_type")),
+                    };
+                    match services.finance.create_transaction(NewTransaction {
+                        amount: r.amount, tx_type, category_id: r.category_id,
+                        description: r.description, date: r.date,
+                        recurring_id: None,
+                    }) {
+                        Ok(t) => response_base.clone()
+                            .with_payload(&crate::ipc::FinanceCreateTransactionResponse { transaction: tx_to_dto(t) })
+                            .unwrap_or(response_base),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                    }
+                }
+            }
+        }
+
+        MessageType::FinanceDeleteTransaction => {
+            let req: Option<crate::ipc::FinanceDeleteTransactionRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.delete_transaction(r.id) {
+                    Ok(_) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceDeleteTransactionResponse {})
+                        .unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        MessageType::FinanceMonthlySummary => {
+            let req: Option<crate::ipc::FinanceMonthlySummaryRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.monthly_summary(&r.month) {
+                    Ok(s) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceMonthlySummaryResponse {
+                            month: s.month, total_income: s.total_income,
+                            total_expenses: s.total_expenses, balance: s.balance,
+                            savings_rate: s.savings_rate,
+                        }).unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        MessageType::FinanceListRecurringRules => {
+            match services.finance.list_recurring_rules() {
+                Ok(rules) => response_base.clone()
+                    .with_payload(&crate::ipc::FinanceListRecurringRulesResponse {
+                        rules: rules.into_iter().map(recurring_to_dto).collect(),
+                    }).unwrap_or(response_base),
+                Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+            }
+        }
+
+        MessageType::FinanceCreateRecurringRule => {
+            let req: Option<crate::ipc::FinanceCreateRecurringRuleRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => {
+                    let tx_type = match r.tx_type.parse() {
+                        Ok(t) => t,
+                        Err(_) => return response_base.with_error(IpcError::new("VALIDATION_FAILED", "invalid tx_type")),
+                    };
+                    let period = match r.period.parse() {
+                        Ok(p) => p,
+                        Err(_) => return response_base.with_error(IpcError::new("VALIDATION_FAILED", "invalid period")),
+                    };
+                    match services.finance.create_recurring_rule(NewRecurringRule {
+                        amount: r.amount, tx_type, category_id: r.category_id,
+                        description: r.description, period, day_of_month: r.day_of_month,
+                        next_due: r.next_due,
+                    }) {
+                        Ok(rule) => response_base.clone()
+                            .with_payload(&crate::ipc::FinanceCreateRecurringRuleResponse { rule: recurring_to_dto(rule) })
+                            .unwrap_or(response_base),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                    }
+                }
+            }
+        }
+
+        MessageType::FinanceDeleteRecurringRule => {
+            let req: Option<crate::ipc::FinanceDeleteRecurringRuleRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.deactivate_recurring_rule(r.id) {
+                    Ok(_) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceDeleteRecurringRuleResponse {})
+                        .unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        MessageType::FinanceListBudgets => {
+            let req: Option<crate::ipc::FinanceListBudgetsRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.list_budgets(&r.month) {
+                    Ok(bs) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceListBudgetsResponse {
+                            budgets: bs.into_iter().map(budget_to_dto).collect(),
+                        }).unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        MessageType::FinanceSetBudget => {
+            let req: Option<crate::ipc::FinanceSetBudgetRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.set_budget(NewBudget {
+                    category_id: r.category_id, monthly_limit: r.monthly_limit, month: r.month,
+                }) {
+                    Ok(b) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceSetBudgetResponse { budget: budget_to_dto(b) })
+                        .unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        MessageType::FinanceBudgetStatus => {
+            let req: Option<crate::ipc::FinanceBudgetStatusRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.budget_status(&r.month) {
+                    Ok(items) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceBudgetStatusResponse {
+                            items: items.into_iter().map(|(b, spent)| crate::ipc::FinanceBudgetStatusItem {
+                                category_id: b.category_id, monthly_limit: b.monthly_limit, spent,
+                            }).collect(),
+                        }).unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        MessageType::FinanceListDebts => {
+            match services.finance.list_debts() {
+                Ok(debts) => response_base.clone()
+                    .with_payload(&crate::ipc::FinanceListDebtsResponse {
+                        debts: debts.into_iter().map(debt_to_dto).collect(),
+                    }).unwrap_or(response_base),
+                Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+            }
+        }
+
+        MessageType::FinanceCreateDebt => {
+            let req: Option<crate::ipc::FinanceCreateDebtRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.create_debt(NewDebt {
+                    creditor: r.creditor, total_amount: r.total_amount,
+                    remaining_amount: r.remaining_amount, interest_rate: r.interest_rate,
+                    monthly_payment: r.monthly_payment, due_day: r.due_day, start_date: r.start_date,
+                }) {
+                    Ok(d) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceCreateDebtResponse { debt: debt_to_dto(d) })
+                        .unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        MessageType::FinanceUpdateDebt => {
+            let req: Option<crate::ipc::FinanceUpdateDebtRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.update_debt(r.id, DebtPatch {
+                    remaining_amount: r.remaining_amount, monthly_payment: r.monthly_payment,
+                }) {
+                    Ok(d) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceUpdateDebtResponse { debt: debt_to_dto(d) })
+                        .unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        MessageType::FinanceDeleteDebt => {
+            let req: Option<crate::ipc::FinanceDeleteDebtRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.delete_debt(r.id) {
+                    Ok(_) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceDeleteDebtResponse {})
+                        .unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        MessageType::FinanceListGoals => {
+            match services.finance.list_goals() {
+                Ok(goals) => response_base.clone()
+                    .with_payload(&crate::ipc::FinanceListGoalsResponse {
+                        goals: goals.into_iter().map(goal_to_dto).collect(),
+                    }).unwrap_or(response_base),
+                Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+            }
+        }
+
+        MessageType::FinanceCreateGoal => {
+            let req: Option<crate::ipc::FinanceCreateGoalRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => {
+                    let horizon = match r.horizon.parse() {
+                        Ok(h) => h,
+                        Err(_) => return response_base.with_error(IpcError::new("VALIDATION_FAILED", "invalid horizon")),
+                    };
+                    match services.finance.create_goal(NewGoal {
+                        name: r.name, target_amount: r.target_amount,
+                        current_amount: r.current_amount, deadline: r.deadline, horizon,
+                    }) {
+                        Ok(g) => response_base.clone()
+                            .with_payload(&crate::ipc::FinanceCreateGoalResponse { goal: goal_to_dto(g) })
+                            .unwrap_or(response_base),
+                        Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                    }
+                }
+            }
+        }
+
+        MessageType::FinanceUpdateGoal => {
+            let req: Option<crate::ipc::FinanceUpdateGoalRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.update_goal(r.id, GoalPatch {
+                    current_amount: r.current_amount, target_amount: r.target_amount,
+                    deadline: r.deadline,
+                }) {
+                    Ok(g) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceUpdateGoalResponse { goal: goal_to_dto(g) })
+                        .unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
+            }
+        }
+
+        MessageType::FinanceDeleteGoal => {
+            let req: Option<crate::ipc::FinanceDeleteGoalRequest> =
+                envelope.payload_as().unwrap_or(None).unwrap_or(None);
+            match req {
+                None => response_base.with_error(IpcError::new("VALIDATION_FAILED", "missing payload")),
+                Some(r) => match services.finance.delete_goal(r.id) {
+                    Ok(_) => response_base.clone()
+                        .with_payload(&crate::ipc::FinanceDeleteGoalResponse {})
+                        .unwrap_or(response_base),
+                    Err(e) => response_base.with_error(domain_err_to_ipc(e)),
+                },
             }
         }
 
@@ -585,5 +944,26 @@ pub fn is_storage_request(mt: MessageType) -> bool {
             | MessageType::StorageUpdateNote
             | MessageType::StorageDeleteNote
             | MessageType::StorageExportNote
+            | MessageType::FinanceListCategories
+            | MessageType::FinanceCreateCategory
+            | MessageType::FinanceDeleteCategory
+            | MessageType::FinanceListTransactions
+            | MessageType::FinanceCreateTransaction
+            | MessageType::FinanceDeleteTransaction
+            | MessageType::FinanceMonthlySummary
+            | MessageType::FinanceListRecurringRules
+            | MessageType::FinanceCreateRecurringRule
+            | MessageType::FinanceDeleteRecurringRule
+            | MessageType::FinanceListBudgets
+            | MessageType::FinanceSetBudget
+            | MessageType::FinanceBudgetStatus
+            | MessageType::FinanceListDebts
+            | MessageType::FinanceCreateDebt
+            | MessageType::FinanceUpdateDebt
+            | MessageType::FinanceDeleteDebt
+            | MessageType::FinanceListGoals
+            | MessageType::FinanceCreateGoal
+            | MessageType::FinanceUpdateGoal
+            | MessageType::FinanceDeleteGoal
     )
 }

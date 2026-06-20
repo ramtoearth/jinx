@@ -1,13 +1,19 @@
 pub mod calendar;
+pub mod finance;
 pub mod group;
 pub mod note;
 pub mod shared;
 pub mod task;
 
 pub use calendar::{Event, EventPatch, EventRepository, NewEvent};
+pub use finance::{
+    Budget, Debt, DebtPatch, FinCategory, FinanceRepository, Goal, GoalHorizon, GoalPatch,
+    MonthlySummary, NewBudget, NewCategory, NewDebt, NewGoal, NewRecurringRule, NewTransaction,
+    RecurringPeriod, RecurringRule, Transaction, TransactionFilter, TransactionType,
+};
 pub use group::{Group, GroupInfo, GroupPatch, GroupRepository, GroupsSnapshot, NewGroup};
 pub use note::{NewNote, Note, NoteRepository, NotePatch};
-pub use shared::HexColor;
+pub use shared::{HexColor, days_in_month};
 pub use task::{
     NewTask, Priority, Task, TaskFilter, TaskPatch, TaskRepository, TaskStatus,
 };

@@ -3,6 +3,7 @@ pub mod task_repo;
 pub mod event_repo;
 pub mod note_repo;
 pub mod group_repo;
+pub mod finance_repo;
 pub mod export;
 
 use std::path::{Path, PathBuf};

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use jinx_core::{HexColor, NewEvent, NewGroup, NewTask, TaskFilter};
+use jinx_core::{AppServices, HexColor, NewEvent, NewGroup, NewTask, TaskFilter};
 use jinx_core::task::TaskRepository;
 use jinx_core::calendar::EventRepository;
 use jinx_core::group::GroupRepository;
@@ -38,7 +38,8 @@ fn ipc_create_task_appears_in_storage() {
 
     assert!(is_storage_request(envelope.message_type));
 
-    let response = handle_storage_request(&envelope, &storage);
+    let services = AppServices::new(storage.clone());
+    let response = handle_storage_request(&envelope, &services);
     assert!(response.error.is_none(), "expected no error, got: {:?}", response.error);
     assert!(response.payload.is_some(), "response must carry payload");
 
@@ -119,7 +120,8 @@ fn ipc_list_tasks_with_group_filter() {
     };
     let envelope =
         Envelope::new(Kind::Request, MessageType::StorageListTasks, &req).expect("envelope");
-    let response = handle_storage_request(&envelope, &storage);
+    let services = AppServices::new(storage.clone());
+    let response = handle_storage_request(&envelope, &services);
     assert!(response.error.is_none());
 
     let payload: jinx::ipc::StorageListTasksResponse =

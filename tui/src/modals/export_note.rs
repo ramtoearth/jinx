@@ -5,7 +5,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use jinx_core::note::NoteRepository;
 
 use crate::state::*;
 use jinx::config as app_config;
@@ -46,7 +45,7 @@ pub(crate) fn handle_export_note_key(state: &mut RuntimeState, key: KeyEvent) {
             } else {
                 // Confirm export
                 let path = state.dir_browser.current_dir.join(&state.dir_browser.filename);
-                match state.storage.export_note(state.dir_browser.note_id, &path) {
+                match state.services.notes.export(state.dir_browser.note_id, &path) {
                     Ok(written) => {
                         let msg = state.locale.status.note_exported
                             .replace("{path}", &written.to_string_lossy());

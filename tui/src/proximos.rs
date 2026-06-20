@@ -122,18 +122,7 @@ pub fn add_24h(date: &str, time: &str) -> (String, String) {
 }
 
 pub fn days_in_month(year: u32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 30,
-    }
+    jinx_core::days_in_month(year, month)
 }
 
 #[cfg(test)]

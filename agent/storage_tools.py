@@ -546,3 +546,331 @@ def export_note(id: int, output_path: str) -> str:
     """
     result = _send("storage.export_note", {"id": id, "output_path": output_path})
     return result["written_path"]
+
+
+# ---------------------------------------------------------------------------
+# Finance — Transactions
+# ---------------------------------------------------------------------------
+
+
+def _resolve_category_id(name: str, tx_type_norm: Optional[str] = None) -> int:
+    """Resolve a category name to its ID, creating it if it doesn't exist."""
+    cats = _send("storage.finance.list_categories", {"tx_type": tx_type_norm} if tx_type_norm else None)
+    for cat in cats.get("categories", []):
+        if cat["name"].lower() == name.lower():
+            return cat["id"]
+    # Auto-create
+    result = _send("storage.finance.create_category", {"name": name, "tx_type": tx_type_norm})
+    return result["category"]["id"]
+
+
+@tool
+def register_transaction(
+    amount: float,
+    tx_type: str,
+    category: str,
+    date: str,
+    description: str = "",
+) -> Dict[str, Any]:
+    """Register a financial transaction (income or expense).
+
+    amount: the amount in currency units (e.g. 150.50 = $150.50). Stored as cents internally.
+    tx_type: "ingreso" or "gasto" (income/expense)
+    category: spending category name, e.g. "comida", "transporte", "servicios", "salario". Auto-created if new.
+    date: ISO date, e.g. "2026-06-18"
+    description: optional note about the transaction
+    Returns the created transaction dict.
+    """
+    tx_type_norm = tx_type.lower()
+    if tx_type_norm in ("income", "ingreso"):
+        tx_type_norm = "ingreso"
+    elif tx_type_norm in ("expense", "gasto"):
+        tx_type_norm = "gasto"
+    else:
+        raise StorageError("VALIDATION_FAILED", f"tx_type must be ingreso/gasto, got {tx_type!r}")
+    cents = int(round(amount * 100))
+    category_id = _resolve_category_id(category, tx_type_norm)
+    payload: Dict[str, Any] = {
+        "amount": cents, "tx_type": tx_type_norm, "category_id": category_id,
+        "description": description, "date": date,
+    }
+    result = _send("storage.finance.create_transaction", payload)
+    return result["transaction"]
+
+
+@tool
+def list_transactions(
+    tx_type: Optional[str] = None,
+    category: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """List financial transactions, optionally filtered.
+
+    tx_type: "ingreso" or "gasto" to filter by type
+    category: filter by category name (resolved to ID)
+    from_date: ISO date, e.g. "2026-06-01"
+    to_date: ISO date, e.g. "2026-06-30"
+    Returns a list of transaction dicts with amounts in cents.
+    """
+    payload: Dict[str, Any] = {}
+    if tx_type is not None:
+        payload["tx_type"] = tx_type.lower()
+    if category is not None:
+        category_id = _resolve_category_id(category)
+        payload["category_id"] = category_id
+    if from_date is not None:
+        payload["from_date"] = from_date
+    if to_date is not None:
+        payload["to_date"] = to_date
+    result = _send("storage.finance.list_transactions", payload or None)
+    return result.get("transactions", [])
+
+
+@tool
+def get_monthly_summary(month: str) -> Dict[str, Any]:
+    """Get a financial summary for a given month.
+
+    month: YYYY-MM format, e.g. "2026-06"
+    Returns dict with total_income, total_expenses, balance (all in cents), and savings_rate (%).
+    """
+    result = _send("storage.finance.monthly_summary", {"month": month})
+    return result
+
+
+@tool
+def get_budget_status(month: str) -> List[Dict[str, Any]]:
+    """Get budget vs actual spending for a month.
+
+    month: YYYY-MM format, e.g. "2026-06"
+    Returns list of {category, monthly_limit, spent} (amounts in cents).
+    """
+    result = _send("storage.finance.budget_status", {"month": month})
+    return result.get("items", [])
+
+
+# ---------------------------------------------------------------------------
+# Finance — Recurring Rules
+# ---------------------------------------------------------------------------
+
+
+@tool
+def create_recurring_rule(
+    amount: float,
+    tx_type: str,
+    category: str,
+    period: str,
+    next_due: str,
+    description: str = "",
+    day_of_month: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Create a recurring transaction rule (auto-generates transactions each period).
+
+    amount: amount in currency units (e.g. 5000.00)
+    tx_type: "ingreso" or "gasto"
+    category: category name, e.g. "salario", "renta", "netflix". Auto-created if new.
+    period: "weekly", "biweekly", or "monthly"
+    next_due: next date to generate, e.g. "2026-07-01"
+    description: optional note
+    day_of_month: for monthly, which day (1-31)
+    Returns the created recurring rule dict.
+    """
+    tx_type_norm = "ingreso" if tx_type.lower() in ("income", "ingreso") else "gasto"
+    cents = int(round(amount * 100))
+    category_id = _resolve_category_id(category, tx_type_norm)
+    payload: Dict[str, Any] = {
+        "amount": cents, "tx_type": tx_type_norm, "category_id": category_id,
+        "description": description, "period": period.lower(), "next_due": next_due,
+    }
+    if day_of_month is not None:
+        payload["day_of_month"] = day_of_month
+    result = _send("storage.finance.create_recurring_rule", payload)
+    return result["rule"]
+
+
+@tool
+def list_recurring_rules() -> List[Dict[str, Any]]:
+    """List all active recurring transaction rules.
+
+    Returns list of recurring rule dicts.
+    """
+    result = _send("storage.finance.list_recurring_rules")
+    return result.get("rules", [])
+
+
+@tool
+def delete_recurring_rule(id: int) -> None:
+    """Deactivate a recurring rule (stops generating future transactions).
+
+    id: recurring rule ID
+    """
+    _send("storage.finance.delete_recurring_rule", {"id": id})
+
+
+# ---------------------------------------------------------------------------
+# Finance — Debts
+# ---------------------------------------------------------------------------
+
+
+@tool
+def register_debt(
+    creditor: str,
+    total_amount: float,
+    monthly_payment: float,
+    interest_rate: Optional[float] = None,
+    due_day: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Register a debt to track.
+
+    creditor: who you owe, e.g. "Tarjeta BBVA", "Préstamo auto"
+    total_amount: original/current total debt in currency units
+    monthly_payment: how much you pay per month
+    interest_rate: annual percentage rate, e.g. 18.5 for 18.5%
+    due_day: day of month payment is due (1-31)
+    Returns the created debt dict (amounts in cents).
+    """
+    from datetime import date
+    payload: Dict[str, Any] = {
+        "creditor": creditor,
+        "total_amount": int(round(total_amount * 100)),
+        "remaining_amount": int(round(total_amount * 100)),
+        "monthly_payment": int(round(monthly_payment * 100)),
+        "start_date": date.today().isoformat(),
+    }
+    if interest_rate is not None:
+        payload["interest_rate"] = interest_rate
+    if due_day is not None:
+        payload["due_day"] = due_day
+    result = _send("storage.finance.create_debt", payload)
+    return result["debt"]
+
+
+@tool
+def update_debt_payment(id: int, remaining_amount: Optional[float] = None, monthly_payment: Optional[float] = None) -> Dict[str, Any]:
+    """Update a debt (e.g. after making a payment).
+
+    id: debt ID
+    remaining_amount: new remaining balance in currency units
+    monthly_payment: new monthly payment amount
+    Returns the updated debt dict.
+    """
+    payload: Dict[str, Any] = {"id": id}
+    if remaining_amount is not None:
+        payload["remaining_amount"] = int(round(remaining_amount * 100))
+    if monthly_payment is not None:
+        payload["monthly_payment"] = int(round(monthly_payment * 100))
+    result = _send("storage.finance.update_debt", payload)
+    return result["debt"]
+
+
+@tool
+def list_debts() -> List[Dict[str, Any]]:
+    """List all active debts (remaining > 0).
+
+    Returns list of debt dicts with amounts in cents.
+    """
+    result = _send("storage.finance.list_debts")
+    return result.get("debts", [])
+
+
+# ---------------------------------------------------------------------------
+# Finance — Goals
+# ---------------------------------------------------------------------------
+
+
+@tool
+def register_goal(
+    name: str,
+    target_amount: float,
+    horizon: str,
+    current_amount: float = 0,
+    deadline: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a financial goal.
+
+    name: e.g. "Fondo de emergencia", "Viaje Europa", "Enganche casa"
+    target_amount: goal amount in currency units
+    horizon: "corto" (< 1 year), "mediano" (1-5 years), or "largo" (5+ years)
+    current_amount: how much saved so far (default 0)
+    deadline: optional target date, e.g. "2027-12-31"
+    Returns the created goal dict.
+    """
+    horizon_norm = horizon.lower()
+    if horizon_norm in ("short", "corto"):
+        horizon_norm = "corto"
+    elif horizon_norm in ("medium", "mediano"):
+        horizon_norm = "mediano"
+    elif horizon_norm in ("long", "largo"):
+        horizon_norm = "largo"
+    else:
+        raise StorageError("VALIDATION_FAILED", f"horizon must be corto/mediano/largo, got {horizon!r}")
+    payload: Dict[str, Any] = {
+        "name": name,
+        "target_amount": int(round(target_amount * 100)),
+        "current_amount": int(round(current_amount * 100)),
+        "horizon": horizon_norm,
+    }
+    if deadline is not None:
+        payload["deadline"] = deadline
+    result = _send("storage.finance.create_goal", payload)
+    return result["goal"]
+
+
+@tool
+def update_goal_progress(id: int, current_amount: Optional[float] = None, target_amount: Optional[float] = None) -> Dict[str, Any]:
+    """Update progress on a financial goal.
+
+    id: goal ID
+    current_amount: new saved amount in currency units
+    target_amount: update the target if needed
+    Returns the updated goal dict.
+    """
+    payload: Dict[str, Any] = {"id": id}
+    if current_amount is not None:
+        payload["current_amount"] = int(round(current_amount * 100))
+    if target_amount is not None:
+        payload["target_amount"] = int(round(target_amount * 100))
+    result = _send("storage.finance.update_goal", payload)
+    return result["goal"]
+
+
+@tool
+def list_goals() -> List[Dict[str, Any]]:
+    """List all financial goals with progress.
+
+    Returns list of goal dicts with amounts in cents.
+    """
+    result = _send("storage.finance.list_goals")
+    return result.get("goals", [])
+
+
+# ---------------------------------------------------------------------------
+# Finance — Categories
+# ---------------------------------------------------------------------------
+
+
+@tool
+def list_finance_categories(tx_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List available finance categories.
+
+    tx_type: optional filter — "ingreso" or "gasto". Omit for all categories.
+    Returns list of {id, name, tx_type} dicts.
+    """
+    payload = {"tx_type": tx_type} if tx_type else None
+    result = _send("storage.finance.list_categories", payload)
+    return result.get("categories", [])
+
+
+@tool
+def create_finance_category(name: str, tx_type: Optional[str] = None) -> Dict[str, Any]:
+    """Create a new finance category.
+
+    name: category name, e.g. "comida", "salario"
+    tx_type: "ingreso", "gasto", or omit for both
+    Returns the created category dict.
+    """
+    payload: Dict[str, Any] = {"name": name}
+    if tx_type is not None:
+        payload["tx_type"] = tx_type.lower()
+    result = _send("storage.finance.create_category", payload)
+    return result["category"]

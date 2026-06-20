@@ -246,6 +246,50 @@ pub enum MessageType {
     StorageDeleteNote,
     #[serde(rename = "storage.export_note")]
     StorageExportNote,
+
+    // --- Storage: finance -----------------------------------------------------
+    #[serde(rename = "storage.finance.list_categories")]
+    FinanceListCategories,
+    #[serde(rename = "storage.finance.create_category")]
+    FinanceCreateCategory,
+    #[serde(rename = "storage.finance.delete_category")]
+    FinanceDeleteCategory,
+    #[serde(rename = "storage.finance.list_transactions")]
+    FinanceListTransactions,
+    #[serde(rename = "storage.finance.create_transaction")]
+    FinanceCreateTransaction,
+    #[serde(rename = "storage.finance.delete_transaction")]
+    FinanceDeleteTransaction,
+    #[serde(rename = "storage.finance.monthly_summary")]
+    FinanceMonthlySummary,
+    #[serde(rename = "storage.finance.list_recurring_rules")]
+    FinanceListRecurringRules,
+    #[serde(rename = "storage.finance.create_recurring_rule")]
+    FinanceCreateRecurringRule,
+    #[serde(rename = "storage.finance.delete_recurring_rule")]
+    FinanceDeleteRecurringRule,
+    #[serde(rename = "storage.finance.list_budgets")]
+    FinanceListBudgets,
+    #[serde(rename = "storage.finance.set_budget")]
+    FinanceSetBudget,
+    #[serde(rename = "storage.finance.budget_status")]
+    FinanceBudgetStatus,
+    #[serde(rename = "storage.finance.list_debts")]
+    FinanceListDebts,
+    #[serde(rename = "storage.finance.create_debt")]
+    FinanceCreateDebt,
+    #[serde(rename = "storage.finance.update_debt")]
+    FinanceUpdateDebt,
+    #[serde(rename = "storage.finance.delete_debt")]
+    FinanceDeleteDebt,
+    #[serde(rename = "storage.finance.list_goals")]
+    FinanceListGoals,
+    #[serde(rename = "storage.finance.create_goal")]
+    FinanceCreateGoal,
+    #[serde(rename = "storage.finance.update_goal")]
+    FinanceUpdateGoal,
+    #[serde(rename = "storage.finance.delete_goal")]
+    FinanceDeleteGoal,
 }
 
 // ---------------------------------------------------------------------------
@@ -348,23 +392,8 @@ pub struct ShutdownPayload {}
 // Shared domain vocabulary used by storage payloads
 // ---------------------------------------------------------------------------
 
-/// Task priority, matching the Almacén CHECK constraint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Priority {
-    Alta,
-    Media,
-    Baja,
-}
-
-/// Task status, matching the Almacén CHECK constraint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TaskStatus {
-    Pendiente,
-    Completada,
-    Cancelada,
-}
+pub use jinx_core::Priority;
+pub use jinx_core::TaskStatus;
 
 // ---------------------------------------------------------------------------
 // Storage DTOs (Tasks, Events, Groups)
@@ -727,6 +756,305 @@ pub struct StorageExportNoteRequest {
 pub struct StorageExportNoteResponse {
     pub written_path: String,
 }
+
+// ---------------------------------------------------------------------------
+// Finance IPC payloads
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCategoryDto {
+    pub id: i64,
+    pub name: String,
+    pub tx_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceTransactionDto {
+    pub id: i64,
+    pub amount: i64,
+    pub tx_type: String,
+    pub category_id: i64,
+    pub description: String,
+    pub date: String,
+    pub recurring_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceRecurringRuleDto {
+    pub id: i64,
+    pub amount: i64,
+    pub tx_type: String,
+    pub category_id: i64,
+    pub description: String,
+    pub period: String,
+    pub day_of_month: Option<u32>,
+    pub next_due: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceBudgetDto {
+    pub id: i64,
+    pub category_id: i64,
+    pub monthly_limit: i64,
+    pub month: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDebtDto {
+    pub id: i64,
+    pub creditor: String,
+    pub total_amount: i64,
+    pub remaining_amount: i64,
+    pub interest_rate: Option<f64>,
+    pub monthly_payment: i64,
+    pub due_day: Option<u32>,
+    pub start_date: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceGoalDto {
+    pub id: i64,
+    pub name: String,
+    pub target_amount: i64,
+    pub current_amount: i64,
+    pub deadline: Option<String>,
+    pub horizon: String,
+}
+
+// Requests
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct FinanceListTransactionsRequest {
+    pub tx_type: Option<String>,
+    pub category_id: Option<i64>,
+    pub from_date: Option<String>,
+    pub to_date: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCreateTransactionRequest {
+    pub amount: i64,
+    pub tx_type: String,
+    pub category_id: i64,
+    #[serde(default)]
+    pub description: String,
+    pub date: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDeleteTransactionRequest {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceMonthlySummaryRequest {
+    pub month: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCreateRecurringRuleRequest {
+    pub amount: i64,
+    pub tx_type: String,
+    pub category_id: i64,
+    #[serde(default)]
+    pub description: String,
+    pub period: String,
+    pub day_of_month: Option<u32>,
+    pub next_due: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDeleteRecurringRuleRequest {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceListBudgetsRequest {
+    pub month: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceSetBudgetRequest {
+    pub category_id: i64,
+    pub monthly_limit: i64,
+    pub month: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCreateCategoryRequest {
+    pub name: String,
+    pub tx_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceListCategoriesRequest {
+    pub tx_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDeleteCategoryRequest {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceBudgetStatusRequest {
+    pub month: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCreateDebtRequest {
+    pub creditor: String,
+    pub total_amount: i64,
+    pub remaining_amount: i64,
+    pub interest_rate: Option<f64>,
+    pub monthly_payment: i64,
+    pub due_day: Option<u32>,
+    pub start_date: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceUpdateDebtRequest {
+    pub id: i64,
+    pub remaining_amount: Option<i64>,
+    pub monthly_payment: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDeleteDebtRequest {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCreateGoalRequest {
+    pub name: String,
+    pub target_amount: i64,
+    #[serde(default)]
+    pub current_amount: i64,
+    pub deadline: Option<String>,
+    pub horizon: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceUpdateGoalRequest {
+    pub id: i64,
+    pub current_amount: Option<i64>,
+    pub target_amount: Option<i64>,
+    pub deadline: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDeleteGoalRequest {
+    pub id: i64,
+}
+
+// Responses
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceListCategoriesResponse {
+    pub categories: Vec<FinanceCategoryDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCreateCategoryResponse {
+    pub category: FinanceCategoryDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDeleteCategoryResponse {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceListTransactionsResponse {
+    pub transactions: Vec<FinanceTransactionDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCreateTransactionResponse {
+    pub transaction: FinanceTransactionDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDeleteTransactionResponse {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceMonthlySummaryResponse {
+    pub month: String,
+    pub total_income: i64,
+    pub total_expenses: i64,
+    pub balance: i64,
+    pub savings_rate: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceListRecurringRulesResponse {
+    pub rules: Vec<FinanceRecurringRuleDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCreateRecurringRuleResponse {
+    pub rule: FinanceRecurringRuleDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDeleteRecurringRuleResponse {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceListBudgetsResponse {
+    pub budgets: Vec<FinanceBudgetDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceSetBudgetResponse {
+    pub budget: FinanceBudgetDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceBudgetStatusResponse {
+    pub items: Vec<FinanceBudgetStatusItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceBudgetStatusItem {
+    pub category_id: i64,
+    pub monthly_limit: i64,
+    pub spent: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceListDebtsResponse {
+    pub debts: Vec<FinanceDebtDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCreateDebtResponse {
+    pub debt: FinanceDebtDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceUpdateDebtResponse {
+    pub debt: FinanceDebtDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDeleteDebtResponse {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceListGoalsResponse {
+    pub goals: Vec<FinanceGoalDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceCreateGoalResponse {
+    pub goal: FinanceGoalDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceUpdateGoalResponse {
+    pub goal: FinanceGoalDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FinanceDeleteGoalResponse {}
 
 // ---------------------------------------------------------------------------
 // Tests — minimal smoke checks wiring the types together. The full

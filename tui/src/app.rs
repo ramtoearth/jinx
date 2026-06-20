@@ -11,30 +11,32 @@ use jinx_core::DomainError;
 // Panel identity
 // ---------------------------------------------------------------------------
 
-/// The four panels of the TUI layout.
+/// The five panels of the TUI layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Chat,
     Tareas,
     Calendario,
     Notas,
+    Finanzas,
 }
 
-/// Fixed focus cycle: Chat → Tareas → Calendario → Notas → Chat
-static CYCLE: [Panel; 4] = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas];
+/// Fixed focus cycle: Chat → Tareas → Calendario → Notas → Finanzas → Chat
+static CYCLE: [Panel; 5] = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas, Panel::Finanzas];
 
 impl Panel {
-    fn index(self) -> usize {
+    pub fn index(self) -> usize {
         match self {
             Self::Chat => 0,
             Self::Tareas => 1,
             Self::Calendario => 2,
             Self::Notas => 3,
+            Self::Finanzas => 4,
         }
     }
 
     fn from_index(i: usize) -> Self {
-        CYCLE[i % 4]
+        CYCLE[i % CYCLE.len()]
     }
 
     /// Advance focus forward (Tab).
@@ -44,7 +46,25 @@ impl Panel {
 
     /// Advance focus backward (Shift+Tab).
     pub fn prev(self) -> Self {
-        Self::from_index(self.index() + 3) // +3 mod 4 = -1 mod 4
+        Self::from_index(self.index() + CYCLE.len() - 1)
+    }
+
+    pub fn next_visible(self, vis: &[bool; 5]) -> Self {
+        let mut i = self.index();
+        for _ in 0..CYCLE.len() {
+            i = (i + 1) % CYCLE.len();
+            if vis[i] { return CYCLE[i]; }
+        }
+        self
+    }
+
+    pub fn prev_visible(self, vis: &[bool; 5]) -> Self {
+        let mut i = self.index();
+        for _ in 0..CYCLE.len() {
+            i = (i + CYCLE.len() - 1) % CYCLE.len();
+            if vis[i] { return CYCLE[i]; }
+        }
+        self
     }
 }
 
@@ -70,6 +90,10 @@ pub enum Modal {
     Settings,
     DeleteNote { id: i64 },
     ExportNote { id: i64 },
+    NewTransaction,
+    NewDebt,
+    NewGoal,
+    EditBudget,
 }
 
 // ---------------------------------------------------------------------------
@@ -158,8 +182,6 @@ pub enum AppEvent {
     StatusMessage(String),
     /// Close the active modal without saving.
     CloseModal,
-    /// Tick — used to trigger Panel_Proximos refresh.
-    Tick,
 }
 
 // ---------------------------------------------------------------------------
@@ -242,9 +264,6 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> AppState {
         AppEvent::CloseModal => {
             state.modal = None;
         }
-        AppEvent::Tick => {
-            // Proximos panel refresh is driven by storage_version in the renderer
-        }
     }
     state
 }
@@ -254,31 +273,7 @@ pub fn reduce(mut state: AppState, event: AppEvent) -> AppState {
 // ---------------------------------------------------------------------------
 
 fn dispatch_panel_key(state: &mut AppState, key: KeyEvent) {
-    match state.focused_panel {
-        Panel::Chat => dispatch_chat_key(state, key),
-        Panel::Tareas => dispatch_tareas_key(state, key),
-        Panel::Calendario => dispatch_calendario_key(state, key),
-        Panel::Notas => dispatch_notas_key(state, key),
-    }
-}
-
-fn dispatch_chat_key(_state: &mut AppState, _key: KeyEvent) {
-    // Chat input is handled directly by the Panel_Chat widget; the app state
-    // has nothing extra to track here.
-}
-
-fn dispatch_tareas_key(state: &mut AppState, key: KeyEvent) {
-    // Opening a blank modal is a pure state transition; editing/deleting needs
-    // the cursor position held in RuntimeState and is handled in main.rs.
-    if let KeyCode::Char('n') = key.code {
+    if state.focused_panel == Panel::Tareas && key.code == KeyCode::Char('n') {
         state.modal = Some(Modal::NewTask);
     }
-}
-
-fn dispatch_calendario_key(_state: &mut AppState, _key: KeyEvent) {
-    // Handled directly in main.rs handle_calendario_key
-}
-
-fn dispatch_notas_key(_state: &mut AppState, _key: KeyEvent) {
-    // Handled directly in main.rs / notas.rs
 }

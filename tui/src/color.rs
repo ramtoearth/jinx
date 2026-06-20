@@ -156,10 +156,6 @@ pub fn resolve_style(
     }
 }
 
-/// Returns the neutral style for entries without a Group.
-pub fn neutral_style(mode: ColorMode) -> StyledText {
-    resolve_style(None, None, mode)
-}
 
 // ---------------------------------------------------------------------------
 // xterm-256 colour palette (216 colour cube + 24 grayscale + 16 system)
@@ -243,13 +239,6 @@ mod tests {
         let hex = HexColor::new("#3465A4").unwrap();
         let result = resolve_style(Some(&hex), Some("trabajo"), ColorMode::Monochrome);
         assert_eq!(result.prefix, Some("[trabajo]".to_string()));
-    }
-
-    #[test]
-    fn neutral_style_no_group() {
-        let result = resolve_style(None, None, ColorMode::TrueColor);
-        assert!(result.prefix.is_none());
-        assert_eq!(result.style.fg, Some(Color::DarkGray));
     }
 
     #[test]

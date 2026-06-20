@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::{
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
+    event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -25,11 +25,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs},
     Terminal,
 };
-use jinx_core::{
-    TaskFilter,
-    task::TaskRepository, calendar::EventRepository,
-};
-use jinx_core::SqliteStorage;
+use jinx_core::{AppServices, SqliteStorage, TaskFilter};
 
 use jinx::app::{AppEvent, AppState, Panel, MIN_COLS, MIN_ROWS};
 use jinx::calendario::{entry_count, flat_entries};
@@ -46,6 +42,10 @@ use modals::*;
 
 mod panels;
 use panels::*;
+
+fn current_month() -> String {
+    chrono::Local::now().format("%Y-%m").to_string()
+}
 
 // ---------------------------------------------------------------------------
 // Main
@@ -70,7 +70,7 @@ fn main() -> io::Result<()> {
     // -- Terminal setup ----------------------------------------------------
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -78,7 +78,7 @@ fn main() -> io::Result<()> {
 
     // -- Cleanup -----------------------------------------------------------
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableBracketedPaste)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableBracketedPaste, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {
@@ -120,7 +120,8 @@ fn run_app(
         tareas_section: TareasSection::default(),
         tareas_filter: ActiveTaskFilter::default(),
         color_mode: detect_color_mode(),
-        storage: storage.clone(),
+        visible_panels: cfg.visible_panels,
+        services: AppServices::new(storage.clone()),
         agent_child: None,
         agent_stdin: None,
         agent_rx: None,
@@ -156,6 +157,12 @@ fn run_app(
         cmd_picker_active: false,
         cmd_picker_cursor: 0,
         cmd_picker_filtered: Vec::new(),
+        finance_month: current_month(),
+        finance_categories: Vec::new(),
+        transaction_form: TransactionFormState::default(),
+        debt_form: DebtFormState::default(),
+        goal_form: GoalFormState::default(),
+        budget_form: BudgetFormState::default(),
         panel_area: None,
         input_area: None,
         history_area: None,
@@ -163,6 +170,9 @@ fn run_app(
 
     // Spawn agent
     spawn_agent(&mut state);
+
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let _ = state.services.finance.generate_pending_recurrings(&today);
 
     let tick = Duration::from_millis(250);
     let timeout_dur = Duration::from_secs(30);
@@ -238,13 +248,13 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         KeyCode::Tab if key.modifiers == KeyModifiers::NONE => {
             state.pending_g = false;
             state.notes_pending_g = false;
-            state.app = jinx::app::reduce(state.app.clone(), AppEvent::Key(key));
+            state.app.focused_panel = state.app.focused_panel.next_visible(&state.visible_panels);
             return;
         }
         KeyCode::BackTab => {
             state.pending_g = false;
             state.notes_pending_g = false;
-            state.app = jinx::app::reduce(state.app.clone(), AppEvent::Key(key));
+            state.app.focused_panel = state.app.focused_panel.prev_visible(&state.visible_panels);
             return;
         }
         _ => {}
@@ -265,6 +275,7 @@ fn handle_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
         Panel::Tareas => handle_tareas_key(state, key),
         Panel::Calendario => handle_calendario_key(state, key),
         Panel::Notas => handle_notas_key(state, key),
+        Panel::Finanzas => handle_finanzas_key(state, key),
     }
 }
 
@@ -310,12 +321,12 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
             }
             match state.app.focused_panel {
                 Panel::Tareas => {
-                    let count = state.storage.list_tasks(state.tareas_filter.to_storage_filter()).unwrap_or_default().len();
+                    let count = state.services.tasks.list(state.tareas_filter.to_storage_filter()).unwrap_or_default().len();
                     if state.task_cursor + 1 < count { state.task_cursor += 1; }
                 }
                 Panel::Calendario => {
-                    let tasks = state.storage.list_tasks(TaskFilter::default()).unwrap_or_default();
-                    let events = state.storage.list_events(None, None).unwrap_or_default();
+                    let tasks = state.services.tasks.list(TaskFilter::default()).unwrap_or_default();
+                    let events = state.services.calendar.list(None, None).unwrap_or_default();
                     let mut view = jinx::calendario::calendar_layout(&tasks, &events);
                     if let Some((from, to)) = calendar_date_range(state.calendar_filter_idx) {
                         view.retain(|date, _| date.as_str() >= from.as_str() && date.as_str() <= to.as_str());
@@ -327,6 +338,24 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
                 _ => { state.chat_scroll = state.chat_scroll.saturating_sub(3); }
             }
         }
+        MouseEventKind::Down(_) if row < 3 => {
+            // ponytail: equal-width tab hit detection over visible panels
+            let visible_panels: Vec<Panel> = [Panel::Chat, Panel::Tareas, Panel::Calendario, Panel::Notas, Panel::Finanzas]
+                .iter().enumerate()
+                .filter(|(i, _)| state.visible_panels[*i])
+                .map(|(_, p)| *p)
+                .collect();
+            let n = visible_panels.len() as u16;
+            let width = state.panel_area.map(|r| r.width).unwrap_or(80);
+            if let Some(tab_width) = width.checked_div(n) {
+                if let Some(idx) = col.saturating_sub(1).checked_div(tab_width) {
+                    let idx = idx as usize;
+                    if let Some(&panel) = visible_panels.get(idx.min(visible_panels.len().saturating_sub(1))) {
+                        state.app.focused_panel = panel;
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -334,6 +363,22 @@ fn handle_mouse(state: &mut RuntimeState, mouse: MouseEvent) {
 fn handle_paste(state: &mut RuntimeState, data: String) {
     if state.app.modal.is_some() {
         handle_modal_paste(state, &data);
+        return;
+    }
+    if state.app.focused_panel == Panel::Notas && state.notes_view == NotesView::Edit {
+        for c in data.chars() {
+            if c == '\n' || c == '\r' {
+                if state.notes_title_focused {
+                    state.notes_title_editor.insert_char(' ');
+                } else {
+                    state.notes_editor.insert_newline();
+                }
+            } else if state.notes_title_focused {
+                state.notes_title_editor.insert_char(c);
+            } else {
+                state.notes_editor.insert_char(c);
+            }
+        }
         return;
     }
     if state.app.focused_panel != Panel::Chat {
@@ -387,6 +432,7 @@ fn render(frame: &mut ratatui::Frame, state: &mut RuntimeState) {
         Panel::Tareas => render_tareas(frame, state, chunks[1]),
         Panel::Calendario => render_calendario(frame, state, chunks[1]),
         Panel::Notas => render_notas(frame, state, chunks[1]),
+        Panel::Finanzas => render_finanzas(frame, state, chunks[1]),
     }
 
     render_status(frame, state, chunks[2]);
@@ -398,19 +444,24 @@ fn render(frame: &mut ratatui::Frame, state: &mut RuntimeState) {
 }
 
 fn render_tabs(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let active = match state.app.focused_panel {
-        Panel::Chat => 0,
-        Panel::Tareas => 1,
-        Panel::Calendario => 2,
-        Panel::Notas => 3,
-    };
-    let tabs = Tabs::new(vec![
+    let all_labels = [
         format!("  {}  ", state.locale.panels.chat),
         format!("  {}  ", state.locale.panels.tasks),
         format!("  {}  ", state.locale.panels.calendar),
         format!("  {}  ", state.locale.panels.notes),
-    ])
-        .select(active)
+        "  Finanzas  ".to_string(),
+    ];
+    let visible_labels: Vec<String> = all_labels.iter().enumerate()
+        .filter(|(i, _)| state.visible_panels[*i])
+        .map(|(_, l)| l.clone())
+        .collect();
+    let active_idx = all_labels.iter().enumerate()
+        .filter(|(i, _)| state.visible_panels[*i])
+        .position(|(i, _)| i == state.app.focused_panel.index())
+        .unwrap_or(0);
+
+    let tabs = Tabs::new(visible_labels)
+        .select(active_idx)
         .block(Block::default().borders(Borders::ALL))
         .style(Style::default().fg(Color::DarkGray))
         .highlight_style(
@@ -422,7 +473,15 @@ fn render_tabs(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
 }
 
 fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
-    let hint = &state.locale.hints.global;
+    let global = &state.locale.hints.global;
+    let panel_hint = match state.app.focused_panel {
+        Panel::Finanzas => Some(state.locale.hints.finanzas.as_str()),
+        _ => None,
+    };
+    let hint = match panel_hint {
+        Some(ph) if !ph.is_empty() => format!("{ph}  │  {global}"),
+        _ => global.to_string(),
+    };
 
     if let Some((spinner_char, secs)) = spinner_state(&state.pending_request) {
         let working = state.locale.chat.thinking_status
@@ -433,7 +492,7 @@ fn render_status(frame: &mut ratatui::Frame, state: &RuntimeState, area: Rect) {
         frame.render_widget(para, area);
     } else {
         let text = if state.app.status_bar.is_empty() {
-            hint.to_string()
+            hint
         } else {
             format!("{}  │  {}", state.app.status_bar, hint)
         };
@@ -458,7 +517,7 @@ mod tests {
 
     #[test]
     fn p24_storage_error_message_in_status_bar() {
-        let storage = Arc::new(SqliteStorage::in_memory().expect("in-memory"));
+        let _storage = Arc::new(SqliteStorage::in_memory().expect("in-memory"));
         let mut app = AppState::new(120, 40);
 
         let err = jinx_core::DomainError::NotFound("Task 99 not found".to_string());

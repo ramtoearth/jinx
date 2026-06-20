@@ -6,8 +6,6 @@ use ratatui::{
     widgets::{List, ListItem},
 };
 use jinx_core::{Priority, TaskPatch, TaskStatus};
-use jinx_core::task::TaskRepository;
-use jinx_core::group::GroupRepository;
 
 use crate::modals::{open_new_task_modal, open_edit_task_modal, open_new_group_modal, open_edit_group_modal, open_filter_modal};
 use crate::state::*;
@@ -75,7 +73,7 @@ pub(crate) fn handle_tareas_tasks_key(state: &mut RuntimeState, key: crossterm::
                 } else {
                     TaskStatus::Completada
                 };
-                match state.storage.update_task(
+                match state.services.tasks.update(
                     task_id,
                     TaskPatch { status: Some(new_status), ..Default::default() },
                 ) {
@@ -161,7 +159,7 @@ pub(crate) fn get_search_filtered_tasks(state: &RuntimeState) -> Vec<jinx_core::
 }
 
 pub(crate) fn handle_tareas_groups_key(state: &mut RuntimeState, key: crossterm::event::KeyEvent) {
-    let groups = state.storage.list_groups().unwrap_or_default();
+    let groups = state.services.groups.list().unwrap_or_default();
     if state.pending_g {
         state.pending_g = false;
         if key.code == KeyCode::Char('g') {
@@ -196,8 +194,9 @@ pub(crate) fn handle_tareas_groups_key(state: &mut RuntimeState, key: crossterm:
 
 pub(crate) fn get_filtered_tasks(state: &RuntimeState) -> Vec<jinx_core::Task> {
     let mut tasks = state
-        .storage
-        .list_tasks(state.tareas_filter.to_storage_filter())
+        .services
+        .tasks
+        .list(state.tareas_filter.to_storage_filter())
         .unwrap_or_default();
     if !state.tareas_filter.priorities.is_empty() {
         tasks.retain(|t| state.tareas_filter.priorities.contains(&t.priority));
@@ -206,7 +205,7 @@ pub(crate) fn get_filtered_tasks(state: &RuntimeState) -> Vec<jinx_core::Task> {
 }
 
 pub(crate) fn refresh_groups_cache(state: &mut RuntimeState) {
-    state.groups_cache = state.storage.list_groups().unwrap_or_default();
+    state.groups_cache = state.services.groups.list().unwrap_or_default();
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +217,7 @@ pub(crate) fn render_tareas(frame: &mut ratatui::Frame, state: &mut RuntimeState
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let groups = state.storage.list_groups().unwrap_or_default();
+    let groups = state.services.groups.list().unwrap_or_default();
     let groups_height = (groups.len() + 3).min(8) as u16;
 
     let sections = Layout::default()

@@ -89,6 +89,7 @@ notes_list = "  ↑↓:nav  n:nueva  Enter:abrir  d:del  /:buscar"
 notes_preview = "  e:editar  Esc:volver  j/k:scroll  d:del  s:exportar"
 notes_edit = "  Ctrl+S:guardar  Esc:volver  Ctrl+T:título/cuerpo"
 export_note = "  ↑↓:nav  →:abrir  ←:padre  Enter:guardar  Esc:cancelar"
+finanzas = "n:transacción  d:deuda  g:meta  b:presupuesto  ←→:mes"
 
 [filters]
 pending = "pendiente"

@@ -5,10 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use jinx_core::{
-    HexColor, NewGroup,
-    group::GroupRepository,
-};
+use jinx_core::{HexColor, NewGroup};
 
 use crate::state::*;
 use jinx::text_editor::TextEditor;
@@ -19,7 +16,7 @@ pub(crate) fn open_new_group_modal(state: &mut RuntimeState) {
 }
 
 pub(crate) fn open_edit_group_modal(state: &mut RuntimeState, id: i64) {
-    let groups = state.storage.list_groups().unwrap_or_default();
+    let groups = state.services.groups.list().unwrap_or_default();
     if let Some(g) = groups.iter().find(|g| g.id == id) {
         let color_str = g.color.to_string();
         let color_idx = COLOR_PRESETS.iter().position(|&p| p == color_str).unwrap_or(0);
@@ -92,11 +89,11 @@ pub(crate) fn save_group(state: &mut RuntimeState) {
     };
 
     let result: Result<_, _> = if let Some(id) = form.edit_id {
-        state.storage.rename_group(id, name_text.trim().to_string())
-            .and_then(|_| state.storage.recolor_group(id, color))
+        state.services.groups.rename(id, name_text.trim().to_string())
+            .and_then(|_| state.services.groups.recolor(id, color))
             .map(|_| ())
     } else {
-        state.storage.create_group(NewGroup { name: name_text.trim().to_string(), color }).map(|_| ())
+        state.services.groups.create(NewGroup { name: name_text.trim().to_string(), color }).map(|_| ())
     };
 
     match result {

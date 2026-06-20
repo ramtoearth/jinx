@@ -1,5 +1,5 @@
 use std::process::{Child, ChildStdin};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use crossterm::event::KeyCode;
@@ -8,8 +8,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
-use jinx_core::{Group, Priority, TaskFilter, TaskStatus};
-use jinx_core::SqliteStorage;
+use jinx_core::{AppServices, Group, Priority, TaskFilter, TaskStatus};
 use uuid::Uuid;
 
 use jinx::app::AppState;
@@ -142,7 +141,7 @@ impl GroupFormState {
 
 #[derive(Default, Clone)]
 pub(crate) struct SettingsFormState {
-    pub(crate) field: usize,              // 0=language, 1=provider, 2=model|backend, 3=host|model
+    pub(crate) field: usize,              // 0=language, 1=provider, 2=model|backend, 3=host|model, 4=panels
     pub(crate) language_idx: usize,       // 0=English, 1=Español
     pub(crate) provider_idx: usize,       // 0=Local, 1=Remote
     pub(crate) backend_idx: usize,        // 0=Bedrock, 1=OpenAI, 2=Anthropic, 3=Gemini, 4=LlamaAPI
@@ -153,6 +152,8 @@ pub(crate) struct SettingsFormState {
     pub(crate) anthropic_model_input: TextEditor,
     pub(crate) gemini_model_input: TextEditor,
     pub(crate) llamaapi_model_input: TextEditor,
+    pub(crate) panel_sel: [bool; 5],
+    pub(crate) panel_cursor: usize,
 }
 
 #[derive(Clone)]
@@ -180,6 +181,99 @@ impl Default for FilterFormState {
             field: 0,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Finance form states
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub(crate) struct TransactionFormState {
+    pub(crate) amount: String,
+    pub(crate) tx_type_idx: usize, // 0=gasto, 1=ingreso
+    pub(crate) category_idx: usize,
+    pub(crate) category_adding: bool,
+    pub(crate) category_new_name: String,
+    pub(crate) description: String,
+    pub(crate) date: DateTimeInput,
+    pub(crate) field: usize, // 0=amount, 1=type, 2=category, 3=description, 4=date
+    pub(crate) error: Option<String>,
+}
+
+impl Default for TransactionFormState {
+    fn default() -> Self {
+        Self {
+            amount: String::new(),
+            tx_type_idx: 0,
+            category_idx: 0,
+            category_adding: false,
+            category_new_name: String::new(),
+            description: String::new(),
+            date: DateTimeInput::date_only_now(),
+            field: 0,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct DebtFormState {
+    pub(crate) creditor: String,
+    pub(crate) total_amount: String,
+    pub(crate) interest_rate: String,
+    pub(crate) monthly_payment: String,
+    pub(crate) due_day: String,
+    pub(crate) start_date: DateTimeInput,
+    pub(crate) field: usize,
+    pub(crate) error: Option<String>,
+}
+
+impl Default for DebtFormState {
+    fn default() -> Self {
+        Self {
+            creditor: String::new(),
+            total_amount: String::new(),
+            interest_rate: String::new(),
+            monthly_payment: String::new(),
+            due_day: String::new(),
+            start_date: DateTimeInput::date_only_now(),
+            field: 0,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct GoalFormState {
+    pub(crate) name: String,
+    pub(crate) target_amount: String,
+    pub(crate) current_amount: String,
+    pub(crate) deadline: DateTimeInput,
+    pub(crate) horizon_idx: usize, // 0=corto, 1=mediano, 2=largo
+    pub(crate) field: usize,
+    pub(crate) error: Option<String>,
+}
+
+impl Default for GoalFormState {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            target_amount: String::new(),
+            current_amount: String::new(),
+            deadline: DateTimeInput::date_only_disabled(),
+            horizon_idx: 0,
+            field: 0,
+            error: None,
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct BudgetFormState {
+    pub(crate) category_idx: usize,
+    pub(crate) monthly_limit: String,
+    pub(crate) field: usize,
+    pub(crate) error: Option<String>,
 }
 
 pub(crate) struct DirBrowserEntry {
@@ -277,6 +371,21 @@ impl DateTimeInput {
             segment: 0,
             has_time: false,
             enabled: false,
+            typing_buf: String::new(),
+        }
+    }
+
+    pub(crate) fn date_only_now() -> Self {
+        let now = chrono::Local::now();
+        Self {
+            year: now.format("%Y").to_string().parse().unwrap_or(2026),
+            month: now.format("%m").to_string().parse().unwrap_or(1),
+            day: now.format("%d").to_string().parse().unwrap_or(1),
+            hour: 0,
+            minute: 0,
+            segment: 0,
+            has_time: false,
+            enabled: true,
             typing_buf: String::new(),
         }
     }
@@ -672,7 +781,8 @@ pub(crate) struct RuntimeState {
     pub(crate) tareas_section: TareasSection,
     pub(crate) tareas_filter: ActiveTaskFilter,
     pub(crate) color_mode: ColorMode,
-    pub(crate) storage: Arc<SqliteStorage>,
+    pub(crate) visible_panels: [bool; 5],
+    pub(crate) services: AppServices,
     pub(crate) agent_child: Option<Child>,
     pub(crate) agent_stdin: Option<ChildStdin>,
     pub(crate) agent_rx: Option<mpsc::Receiver<Envelope>>,
@@ -714,6 +824,13 @@ pub(crate) struct RuntimeState {
     pub(crate) cmd_picker_active: bool,
     pub(crate) cmd_picker_cursor: usize,
     pub(crate) cmd_picker_filtered: Vec<usize>,
+    // Finance panel
+    pub(crate) finance_month: String,
+    pub(crate) finance_categories: Vec<jinx_core::FinCategory>,
+    pub(crate) transaction_form: TransactionFormState,
+    pub(crate) debt_form: DebtFormState,
+    pub(crate) goal_form: GoalFormState,
+    pub(crate) budget_form: BudgetFormState,
     // Layout rects for mouse hit-testing
     pub(crate) panel_area: Option<Rect>,
     pub(crate) input_area: Option<Rect>,
